@@ -390,22 +390,18 @@ struct P21PhiloxRng {
         buf[2] = v2;
         buf[3] = v3;
         idx = 0;
-        if (++c0 == 0) {
-            if (++c1 == 0) {
-                if (++c2 == 0) {
-                    ++c3;
-                }
-            }
+        if (++c0 == 0U) {
+            c1 = (c1 & 0xFF000000U) | ((c1 + 1U) & 0x00FFFFFFU);
         }
     }
 
     __device__ void init(uint64_t seed, uint64_t stream_id, uint32_t substream = 0) {
         k0 = (uint32_t)(seed & 0xFFFFFFFFULL);
         k1 = (uint32_t)(seed >> 32);
-        c0 = (uint32_t)(stream_id & 0xFFFFFFFFULL);
-        c1 = (uint32_t)(stream_id >> 32);
-        c2 = substream;
-        c3 = 0U;
+        c0 = 0U;
+        c1 = (substream & 0xFFU) << 24;
+        c2 = (uint32_t)(stream_id & 0xFFFFFFFFULL);
+        c3 = (uint32_t)(stream_id >> 32);
         idx = 4;
     }
 
@@ -1866,7 +1862,10 @@ extern "C" int p21_cuda_sample_halo_progenitors(unsigned long long int seed, dou
     }
 
     if (ok) {
-        const double m_to_r_pref = 4.0 * M_PI / 3.0 * RHOcrit * cosmo_params_global->OMm;
+        const double m_to_r_pref =
+            (matter_options_global->FILTER == FILTER_GAUSSIAN ? pow(2.0 * M_PI, 1.5)
+                                                              : (4.0 * M_PI / 3.0)) *
+            RHOcrit * cosmo_params_global->OMm;
         int blocks = (int)((nhalo_in + kBlockThreads - 1) / kBlockThreads);
         sampler_prog_emit_kernel<<<blocks, kBlockThreads, 0, stream>>>(
             nhalo_in, skp, (uint64_t)seed, m_to_r_pref, d_in_m, d_in_c, d_in_sr, d_in_sfrr,

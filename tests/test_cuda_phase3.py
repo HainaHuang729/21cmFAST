@@ -879,3 +879,72 @@ def test_fast_halo_sampler_overflow_error(tmp_path: Path) -> None:
             assert f"Thread {t}:" in stderr_text
     finally:
         stderr_path.unlink(missing_ok=True)
+
+
+@requires_cuda_runtime
+def test_fast_halo_sampler_stream_independence(tmp_path: Path) -> None:
+    """Verify fast GPU halo sampler produces independent property RNG streams."""
+    inputs = _make_inputs(
+        random_seed=7701,
+        dim=48,
+        hii_dim=16,
+        box_len=64.0,
+        n_threads=4,
+        node_redshifts=(11.0, 10.0),
+        source_model="CHMF-SAMPLER",
+        hmf="ST",
+        sample_method="MASS-LIMITED",
+        sampler_min_mass=2e8,
+        use_ts_fluct=False,
+        recomb_model="none",
+    )
+
+    with p21.config.use(
+        USE_CUDA=True,
+        CUDA_FAST_HALO_SAMPLER=True,
+        HALO_CATALOG_MEM_FACTOR=2.0,
+        direc=str(tmp_path / "indep"),
+    ):
+        ics = p21.compute_initial_conditions(
+            inputs=inputs, regenerate=True, write=False
+        )
+        desc = p21.determine_halo_catalog(
+            redshift=10.0,
+            initial_conditions=ics,
+            inputs=inputs,
+            regenerate=True,
+            write=False,
+        )
+        prog = p21.determine_halo_catalog(
+            redshift=11.0,
+            initial_conditions=ics,
+            descendant_halos=desc,
+            inputs=inputs,
+            regenerate=True,
+            write=False,
+        )
+
+    for label, hc in (("desc", desc), ("prog", prog)):
+        n = int(hc.n_halos)
+        assert n > 1000, f"{label}: too few halos ({n})"
+        sr = np.asarray(hc.get("star_rng")[:n], dtype=np.float32)
+        sfr = np.asarray(hc.get("sfr_rng")[:n], dtype=np.float32)
+        xr = np.asarray(hc.get("xray_rng")[:n], dtype=np.float32)
+        for lag in (1, 2, 3, 4):
+            assert not np.any(sr[:-lag] == sr[lag:]), f"{label} sr==sr lag={lag}"
+            assert not np.any(sr[:-lag] == sfr[lag:]), f"{label} sr==sfr lag={lag}"
+            assert not np.any(sfr[:-lag] == sr[lag:]), f"{label} sfr==sr lag={lag}"
+            assert not np.any(sr[:-lag] == xr[lag:]), f"{label} sr==xr lag={lag}"
+            assert not np.any(xr[:-lag] == sr[lag:]), f"{label} xr==sr lag={lag}"
+            assert not np.any(sfr[:-lag] == xr[lag:]), f"{label} sfr==xr lag={lag}"
+            assert not np.any(xr[:-lag] == sfr[lag:]), f"{label} xr==sfr lag={lag}"
+        if label == "desc":
+            for prop_name, arr in (
+                ("star_rng", sr),
+                ("sfr_rng", sfr),
+                ("xray_rng", xr),
+            ):
+                ac = float(np.corrcoef(arr[:-1], arr[1:])[0, 1])
+                assert abs(ac) < 0.05, f"{label} {prop_name} lag-1 corr={ac}"
+                assert abs(float(arr.mean())) < 0.05, f"{label} {prop_name} mean"
+                assert 0.95 < float(arr.std()) < 1.05, f"{label} {prop_name} std"
