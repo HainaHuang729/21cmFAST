@@ -8,6 +8,7 @@
    quickstart
    tutorials
    performance
+   cuda
    models
    M_TURN
    Radiation_Fields

@@ -66,3 +66,21 @@ of the spin temperature.
 
 As expected, we can see that higher ``Z_HEAT_MAX`` and lower ``ZPRIME_STEP_FACTOR`` tend to increase the total runtime (the more redshift iterations
 the more time needed for the simulation to complete).
+
+
+GPU Acceleration (CUDA)
+-----------------------
+
+``21cmFAST`` includes an optional native C/CUDA + cuFFT backend that can accelerate
+coeval and lightcone runs across Eulerian and Lagrangian source models. On an NVIDIA RTX
+A6000 (``sm_86``, CUDA 12.6), measured end-to-end speedups include:
+
+* **Eulerian lightcone** (``192^3 / 64^3``, 43 nodes, ``USE_TS_FLUCT=True``,
+  inhomogeneous recombinations): ``7.84x`` vs. 2-thread CPU, ``4.82x`` vs. 4-thread CPU,
+  and ``12.09x`` vs. 1-thread CPU with 1-thread CUDA.
+* **``L-INTEGRAL``** (``192^3 / 64^3``, 10 nodes): ``4.39x`` vs. 2-thread CPU.
+* **``DEXM-ESF``** (``96^3 / 32^3``, 3 nodes): ``3.98x`` vs. 2-thread CPU.
+* **``CHMF-SAMPLER``** (``96^3 / 32^3``, 5 nodes): ``4.32x`` (default) and ``6.39x``
+  (with ``CUDA_FAST_HALO_SAMPLER=True``) vs. 2-thread CPU.
+
+See :doc:`cuda` for compilation, configuration, CLI flags, and diagnostics.

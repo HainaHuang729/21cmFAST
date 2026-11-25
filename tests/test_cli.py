@@ -3,6 +3,7 @@
 import tempfile
 import tomllib as toml
 from pathlib import Path
+from types import SimpleNamespace
 
 import h5py
 import pytest
@@ -10,6 +11,7 @@ from rich.console import Console
 
 from py21cmfast import Coeval, GlobalEvolution, LightCone, cli, config
 from py21cmfast._templates import create_params_from_template
+from py21cmfast.c_21cmfast import lib
 from py21cmfast.cli import Parameters, ParameterSelection, RunParams, _run_setup, app
 from py21cmfast.io.h5 import load_high_level_simulation, read_output_struct
 
@@ -746,3 +748,130 @@ class TestCanShowPlots:
         )
 
         assert not shown
+
+
+class TestCudaCliOptions:
+    """Tests for CUDA CLI options and context-scoped configuration."""
+
+    def test_use_cuda_and_fast_sampler_override_and_restore(
+        self, tmp_path, monkeypatch
+    ):
+        """``--use-cuda --cuda-fast-halo-sampler`` applies only during execution."""
+        observed = []
+
+        def _fake_compute_ic(**kwargs):
+            observed.append(
+                (
+                    config["USE_CUDA"],
+                    config["CUDA_FAST_HALO_SAMPLER"],
+                    lib.p21_cuda_get_enabled(),
+                    lib.p21_cuda_get_fast_halo_sampler(),
+                )
+            )
+
+        monkeypatch.setattr(cli, "compute_initial_conditions", _fake_compute_ic)
+
+        with config.use(USE_CUDA=False, CUDA_FAST_HALO_SAMPLER=False):
+            app_noexit(
+                "run ics --template simple tiny "
+                f"--cachedir {tmp_path} --use-cuda --cuda-fast-halo-sampler"
+            )
+            assert observed == [(True, True, 1, 1)]
+            assert config["USE_CUDA"] is False
+            assert config["CUDA_FAST_HALO_SAMPLER"] is False
+            assert lib.p21_cuda_get_enabled() == 0
+            assert lib.p21_cuda_get_fast_halo_sampler() == 0
+
+    def test_no_use_cuda_overrides_enabled_config_and_restores(
+        self, tmp_path, monkeypatch
+    ):
+        """``--no-use-cuda`` temporarily disables CUDA even if enabled in config."""
+        observed = []
+
+        def _fake_generate_coeval(**kwargs):
+            observed.append(
+                (
+                    config["USE_CUDA"],
+                    config["CUDA_FAST_HALO_SAMPLER"],
+                    lib.p21_cuda_get_enabled(),
+                    lib.p21_cuda_get_fast_halo_sampler(),
+                )
+            )
+            return iter(())
+
+        monkeypatch.setattr(cli, "generate_coeval", _fake_generate_coeval)
+
+        with config.use(USE_CUDA=True, CUDA_FAST_HALO_SAMPLER=True):
+            app_noexit(
+                "run coeval -z 10 --template simple tiny "
+                f"--cachedir {tmp_path} --out {tmp_path} "
+                "--no-use-cuda --no-cuda-fast-halo-sampler --no-show"
+            )
+            assert observed == [(False, False, 0, 0)]
+            assert config["USE_CUDA"] is True
+            assert config["CUDA_FAST_HALO_SAMPLER"] is True
+            assert lib.p21_cuda_get_enabled() == 1
+            assert lib.p21_cuda_get_fast_halo_sampler() == 1
+
+    def test_omitted_cuda_flags_preserve_config(self, tmp_path, monkeypatch):
+        """Omitting CUDA flags preserves existing global configuration."""
+        observed = []
+
+        def _fake_run_lightcone(**kwargs):
+            observed.append(
+                (
+                    config["USE_CUDA"],
+                    config["CUDA_FAST_HALO_SAMPLER"],
+                    lib.p21_cuda_get_enabled(),
+                    lib.p21_cuda_get_fast_halo_sampler(),
+                )
+            )
+            return SimpleNamespace(save=lambda _path: None)
+
+        monkeypatch.setattr(cli, "run_lightcone", _fake_run_lightcone)
+        monkeypatch.setattr(cli, "_make_summary_plot", lambda *a, **kw: None)
+
+        with config.use(USE_CUDA=True, CUDA_FAST_HALO_SAMPLER=False):
+            app_noexit(
+                "run lightcone --redshift-range 10 11 --template simple tiny "
+                f"--cachedir {tmp_path} --out {tmp_path / 'lc.h5'} --no-show"
+            )
+            assert observed == [(True, False, 1, 0)]
+            assert config["USE_CUDA"] is True
+            assert config["CUDA_FAST_HALO_SAMPLER"] is False
+            assert lib.p21_cuda_get_enabled() == 1
+            assert lib.p21_cuda_get_fast_halo_sampler() == 0
+
+    def test_global_evolution_applies_and_restores_cuda_flags(
+        self, tmp_path, monkeypatch
+    ):
+        """``run global`` honors ``--use-cuda`` and restores config on exit."""
+        observed = []
+
+        def _fake_run_global(**kwargs):
+            observed.append(
+                (
+                    config["USE_CUDA"],
+                    config["CUDA_FAST_HALO_SAMPLER"],
+                    lib.p21_cuda_get_enabled(),
+                    lib.p21_cuda_get_fast_halo_sampler(),
+                )
+            )
+            return SimpleNamespace(save=lambda _path: None)
+
+        monkeypatch.setattr(cli, "run_global_evolution", _fake_run_global)
+        monkeypatch.setattr(cli, "_make_summary_plot", lambda *a, **kw: None)
+
+        with config.use(USE_CUDA=False, CUDA_FAST_HALO_SAMPLER=True):
+            app_noexit(
+                "run global --template latest "
+                "--zprime-step-factor 1.2 --z-heat-max 20 "
+                f"--cachedir {tmp_path} --zmin 12.0 "
+                f"--out {tmp_path / 'global.h5'} --no-show "
+                "--use-cuda --no-cuda-fast-halo-sampler"
+            )
+            assert observed == [(True, False, 1, 0)]
+            assert config["USE_CUDA"] is False
+            assert config["CUDA_FAST_HALO_SAMPLER"] is True
+            assert lib.p21_cuda_get_enabled() == 0
+            assert lib.p21_cuda_get_fast_halo_sampler() == 1

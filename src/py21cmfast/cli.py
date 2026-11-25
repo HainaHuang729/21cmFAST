@@ -1,5 +1,6 @@
 """Module that contains the command line app."""
 
+import contextlib
 import logging
 import sys
 import uuid
@@ -25,6 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__, plotting
+from ._cfg import config
 from ._templates import TOMLMode, list_templates, write_template
 from .drivers import coeval as cvlmodule
 from .drivers.coeval import generate_coeval
@@ -156,6 +158,18 @@ cache only boxes that are required more than one step away
 
     progress: bool = True
     "Whether to display a progress bar as the simulation runs."
+
+    use_cuda: bool | None = None
+    (
+        "Whether to use the native CUDA GPU backend when available. "
+        "Defaults to the global configuration setting."
+    )
+
+    cuda_fast_halo_sampler: bool | None = None
+    (
+        "Whether to use the parallel GPU Philox halo sampler when CUDA is enabled. "
+        "Defaults to the global configuration setting."
+    )
 
 
 def _param_cls_factory(cls: type[InputStruct]) -> type:
@@ -426,6 +440,18 @@ def template_create(
     cns.print(f":duck:[spring_green3] Wrote new template file at [purple]{out}")
 
 
+def _cuda_config_context(options: RunParams) -> contextlib.AbstractContextManager:
+    """Return a context manager applying CLI CUDA config overrides, if set."""
+    overrides: dict[str, bool] = {}
+    if options.use_cuda is not None:
+        overrides["USE_CUDA"] = options.use_cuda
+    if options.cuda_fast_halo_sampler is not None:
+        overrides["CUDA_FAST_HALO_SAMPLER"] = options.cuda_fast_halo_sampler
+    if not overrides:
+        return contextlib.nullcontext()
+    return config.use(**overrides)
+
+
 def _run_setup(
     options: RunParams,
     params: Parameters,
@@ -540,12 +566,13 @@ def ics(
             )
             return
 
-    compute_initial_conditions(
-        inputs=inputs,
-        regenerate=options.regenerate,
-        write=True,
-        cache=OutputCache(options.cachedir),
-    )
+    with _cuda_config_context(options):
+        compute_initial_conditions(
+            inputs=inputs,
+            regenerate=options.regenerate,
+            write=True,
+            cache=OutputCache(options.cachedir),
+        )
 
     cns.print(
         f"[spring_green3]:duck: Saved initial conditions to {rc.InitialConditions}"
@@ -596,28 +623,29 @@ def coeval(
     inputs = _run_setup(options, params, nodez_params=nodez_params)
 
     outfile = None
-    for coeval, in_outputs in generate_coeval(
-        out_redshifts=redshifts,
-        inputs=inputs,
-        regenerate=options.regenerate,
-        cache=OutputCache(options.cachedir),
-        write=getattr(
-            CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
-        )(),
-        progressbar=options.progress,
-    ):
-        if not in_outputs and not save_all_redshifts:
-            continue
+    with _cuda_config_context(options):
+        for coeval, in_outputs in generate_coeval(
+            out_redshifts=redshifts,
+            inputs=inputs,
+            regenerate=options.regenerate,
+            cache=OutputCache(options.cachedir),
+            write=getattr(
+                CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
+            )(),
+            progressbar=options.progress,
+        ):
+            if not in_outputs and not save_all_redshifts:
+                continue
 
-        outfile = out / f"coeval_z{coeval.redshift:.2f}.h5"
-        coeval.save(outfile)
-        cns.print(
-            f"[spring_green3]:duck: Saved z={coeval.redshift:.2f} coeval box to [purple]{outfile}."
-        )
+            outfile = out / f"coeval_z{coeval.redshift:.2f}.h5"
+            coeval.save(outfile)
+            cns.print(
+                f"[spring_green3]:duck: Saved z={coeval.redshift:.2f} coeval box to [purple]{outfile}."
+            )
 
-        _make_summary_plot(
-            coeval, _summary_plot_path(outfile) if plot else None, show=show
-        )
+            _make_summary_plot(
+                coeval, _summary_plot_path(outfile) if plot else None, show=show
+            )
 
     if not plot and outfile is not None:
         _plot_hint(outfile)
@@ -675,16 +703,17 @@ def lightcone(
         quantities=lightcone_quantities,
     )
 
-    lc = run_lightcone(
-        lightconer=lcn,
-        inputs=inputs,
-        regenerate=options.regenerate,
-        write=getattr(
-            CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
-        )(),
-        cache=OutputCache(options.cachedir),
-        progressbar=options.progress,
-    )
+    with _cuda_config_context(options):
+        lc = run_lightcone(
+            lightconer=lcn,
+            inputs=inputs,
+            regenerate=options.regenerate,
+            write=getattr(
+                CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
+            )(),
+            cache=OutputCache(options.cachedir),
+            progressbar=options.progress,
+        )
 
     lc.save(out)
 
@@ -754,11 +783,12 @@ def global_evolution(
         )
         return
 
-    lc = run_global_evolution(
-        inputs=inputs,
-        source_model=source_model,
-        progressbar=options.progress,
-    )
+    with _cuda_config_context(options):
+        lc = run_global_evolution(
+            inputs=inputs,
+            source_model=source_model,
+            progressbar=options.progress,
+        )
 
     lc.save(out)
 
@@ -1072,28 +1102,30 @@ def pr_feature(
 
     cns.print("Running default lightcone...")
 
-    lc_default = run_lightcone(
-        lightconer=lcn,
-        inputs=inputs_default,
-        regenerate=options.regenerate,
-        write=getattr(
-            CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
-        )(),
-        cache=OutputCache(options.cachedir),
-        progressbar=True,
-    )
+    with _cuda_config_context(options):
+        lc_default = run_lightcone(
+            lightconer=lcn,
+            inputs=inputs_default,
+            regenerate=options.regenerate,
+            write=getattr(
+                CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
+            )(),
+            cache=OutputCache(options.cachedir),
+            progressbar=True,
+        )
 
     cns.print("Running lightcone with new feature...")
-    lc_new = run_lightcone(
-        lightconer=lcn,
-        inputs=inputs_new,
-        regenerate=options.regenerate,
-        write=getattr(
-            CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
-        )(),
-        cache=OutputCache(options.cachedir),
-        progressbar=True,
-    )
+    with _cuda_config_context(options):
+        lc_new = run_lightcone(
+            lightconer=lcn,
+            inputs=inputs_new,
+            regenerate=options.regenerate,
+            write=getattr(
+                CacheConfig, options.cache_strategy.replace("dmfield", "noloop")
+            )(),
+            cache=OutputCache(options.cachedir),
+            progressbar=True,
+        )
 
     cns.print("Plotting lightcone slices...")
     fig, ax = plt.subplots(3, 1, sharex=True, sharey=True)

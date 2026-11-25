@@ -174,6 +174,17 @@ default is 4 (or DEBUG). Using very high levels (eg. ULTRA_DEBUG) can print out
 in some specific cases.
 
 
+Native CUDA GPU Backend
+~~~~~~~~~~~~~~~~~~~~~~~
+On Linux systems with an NVIDIA CUDA Toolkit (>= 11.2), you can optionally compile the
+native C/CUDA + cuFFT backend by setting ``USE_CUDA=1`` during build or installation
+(``USE_CUDA=1 pip install -e .``). When ``USE_CUDA`` is unset or
+``0``, no CUDA headers or libraries are linked. Optional build variables include
+``CUDA_ARCHS`` (e.g. ``"80 86 89"``), ``CUDA_HOME`` / ``CUDA_PATH`` / ``NVCC``, and
+``CUDAHOSTCXX``. See :doc:`cuda` for full build, toolchain, runtime configuration, and
+diagnostic details.
+
+
 Installation Instructions
 -------------------------
 
