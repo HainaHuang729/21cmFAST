@@ -3,9 +3,12 @@ Module for setting up the radiation fields in 21cmFAST.
 */
 #include "RadiationFieldsSetup.h"
 
+#include <stdlib.h>
+
 #include "Constants.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "elec_interp.h"
 #include "exceptions.h"
@@ -229,64 +232,98 @@ void fill_freqint_tables(double zp, RadiationFieldsSetup *rad_setup, ScalingCons
     double lower_int_limit;
     int x_e_ct, R_ct;
     int num_R = astro_params_global->N_STEP_TS;
+    int gpu_filled = 0;
 
-#pragma omp parallel private(R_ct, x_e_ct, lower_int_limit) \
-    num_threads(simulation_options_global -> N_THREADS)
-    {
+#ifdef USE_CUDA
+    if (p21_cuda_get_enabled() && num_R > 0) {
+        double *lower_limits = (double *)malloc((size_t)num_R * sizeof(double));
+        if (lower_limits) {
+#pragma omp parallel private(R_ct) num_threads(simulation_options_global -> N_THREADS)
+            {
 #pragma omp for
-        // In TauX we integrate Nion from zpp to zp using the LW turnover mass at zp (pretending its
-        // at zpp)
-        for (R_ct = 0; R_ct < astro_params_global->N_STEP_TS; R_ct++) {
-            // TODO: At the moment, inhomogeneous reionization feedback cannot be accounted in
-            // SpinTemperatureBox.c,
-            //      see https://github.com/21cmfast/21cmFAST/issues/470. Thus, we use the
-            //      homogeneous (feedback-free) ACG turnover mass. It is important to remember to
-            //      fix this when issue #470 is fixed!
-            if (astro_options_global->USE_MCGS) {
-                lower_int_limit =
-                    fmax(nu_tau_one_mcg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
-                                        log10(sc->mturn_acg_homogeneous),
-                                        rad_setup->ave_log10_MturnLW[R_ct], sc),
-                         (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
-            } else {
-                lower_int_limit =
-                    fmax(nu_tau_one_acg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
-                                        log10(sc->mturn_acg_homogeneous), sc),
-                         (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
-            }
-            // set up frequency integral table for later interpolation for the cell's x_e value
-            for (x_e_ct = 0; x_e_ct < x_int_NXHII; x_e_ct++) {
-                rad_setup->freq_int_heat_tbl[freq_index(x_e_ct, R_ct, num_R)] =
-                    integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 0);
-                rad_setup->freq_int_ion_tbl[freq_index(x_e_ct, R_ct, num_R)] =
-                    integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 1);
-                rad_setup->freq_int_lya_tbl[freq_index(x_e_ct, R_ct, num_R)] =
-                    integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 2);
-
-                // we store these to avoid calculating them in the box_ct loop
-                if (x_e_ct > 0) {
-                    rad_setup->freq_int_heat_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
-                        rad_setup->freq_int_heat_tbl[freq_index(x_e_ct, R_ct, num_R)] -
-                        rad_setup->freq_int_heat_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
-                    rad_setup->freq_int_ion_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
-                        rad_setup->freq_int_ion_tbl[freq_index(x_e_ct, R_ct, num_R)] -
-                        rad_setup->freq_int_ion_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
-                    rad_setup->freq_int_lya_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
-                        rad_setup->freq_int_lya_tbl[freq_index(x_e_ct, R_ct, num_R)] -
-                        rad_setup->freq_int_lya_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
+                for (R_ct = 0; R_ct < num_R; R_ct++) {
+                    if (astro_options_global->USE_MCGS) {
+                        lower_limits[R_ct] = fmax(
+                            nu_tau_one_mcg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
+                                           log10(sc->mturn_acg_homogeneous),
+                                           rad_setup->ave_log10_MturnLW[R_ct], sc),
+                            (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
+                    } else {
+                        lower_limits[R_ct] = fmax(
+                            nu_tau_one_acg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
+                                           log10(sc->mturn_acg_homogeneous), sc),
+                            (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
+                    }
                 }
             }
-            LOG_ULTRA_DEBUG("Nu Integrals || R_ct %d R %.2e zpp %.2f nu_min %.2e", R_ct,
-                            rad_setup->R_values[R_ct], rad_setup->zpp_avg[R_ct], lower_int_limit);
-            LOG_ULTRA_DEBUG("heat[x_e=0] %.2e ion[x_e=0] %.2e lya[x_e=0] %.2e",
-                            rad_setup->freq_int_heat_tbl[freq_index(0, R_ct, num_R)],
-                            rad_setup->freq_int_ion_tbl[freq_index(0, R_ct, num_R)],
-                            rad_setup->freq_int_lya_tbl[freq_index(0, R_ct, num_R)]);
+            if (p21_cuda_fill_freqint_tables(zp, num_R, lower_limits, hubble(zp), rad_setup) == 0) {
+                gpu_filled = 1;
+            }
+            free(lower_limits);
         }
+    }
+#endif
+
+    if (!gpu_filled) {
+#pragma omp parallel private(R_ct, x_e_ct, lower_int_limit) \
+    num_threads(simulation_options_global -> N_THREADS)
+        {
+#pragma omp for
+            // In TauX we integrate Nion from zpp to zp using the LW turnover mass at zp (pretending its
+            // at zpp)
+            for (R_ct = 0; R_ct < astro_params_global->N_STEP_TS; R_ct++) {
+                // TODO: At the moment, inhomogeneous reionization feedback cannot be accounted in
+                // SpinTemperatureBox.c,
+                //      see https://github.com/21cmfast/21cmFAST/issues/470. Thus, we use the
+                //      homogeneous (feedback-free) ACG turnover mass. It is important to remember to
+                //      fix this when issue #470 is fixed!
+                if (astro_options_global->USE_MCGS) {
+                    lower_int_limit =
+                        fmax(nu_tau_one_mcg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
+                                            log10(sc->mturn_acg_homogeneous),
+                                            rad_setup->ave_log10_MturnLW[R_ct], sc),
+                             (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
+                } else {
+                    lower_int_limit =
+                        fmax(nu_tau_one_acg(zp, rad_setup->zpp_avg[R_ct], rad_setup->x_e_ave_zp,
+                                            log10(sc->mturn_acg_homogeneous), sc),
+                             (astro_params_global->NU_X_THRESH) * physconst.eV_to_Hz);
+                }
+                // set up frequency integral table for later interpolation for the cell's x_e value
+                for (x_e_ct = 0; x_e_ct < x_int_NXHII; x_e_ct++) {
+                    rad_setup->freq_int_heat_tbl[freq_index(x_e_ct, R_ct, num_R)] =
+                        integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 0);
+                    rad_setup->freq_int_ion_tbl[freq_index(x_e_ct, R_ct, num_R)] =
+                        integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 1);
+                    rad_setup->freq_int_lya_tbl[freq_index(x_e_ct, R_ct, num_R)] =
+                        integrate_over_nu(zp, x_int_XHII[x_e_ct], lower_int_limit, 2);
+
+                    // we store these to avoid calculating them in the box_ct loop
+                    if (x_e_ct > 0) {
+                        rad_setup->freq_int_heat_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
+                            rad_setup->freq_int_heat_tbl[freq_index(x_e_ct, R_ct, num_R)] -
+                            rad_setup->freq_int_heat_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
+                        rad_setup->freq_int_ion_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
+                            rad_setup->freq_int_ion_tbl[freq_index(x_e_ct, R_ct, num_R)] -
+                            rad_setup->freq_int_ion_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
+                        rad_setup->freq_int_lya_tbl_diff[freq_index(x_e_ct - 1, R_ct, num_R)] =
+                            rad_setup->freq_int_lya_tbl[freq_index(x_e_ct, R_ct, num_R)] -
+                            rad_setup->freq_int_lya_tbl[freq_index(x_e_ct - 1, R_ct, num_R)];
+                    }
+                }
+                LOG_ULTRA_DEBUG("Nu Integrals || R_ct %d R %.2e zpp %.2f nu_min %.2e", R_ct,
+                                rad_setup->R_values[R_ct], rad_setup->zpp_avg[R_ct],
+                                lower_int_limit);
+                LOG_ULTRA_DEBUG("heat[x_e=0] %.2e ion[x_e=0] %.2e lya[x_e=0] %.2e",
+                                rad_setup->freq_int_heat_tbl[freq_index(0, R_ct, num_R)],
+                                rad_setup->freq_int_ion_tbl[freq_index(0, R_ct, num_R)],
+                                rad_setup->freq_int_lya_tbl[freq_index(0, R_ct, num_R)]);
+            }
 // separating the inverse diff loop to prevent a race on different R_ct (shouldn't matter)
 #pragma omp for
-        for (x_e_ct = 0; x_e_ct < x_int_NXHII - 1; x_e_ct++) {
-            rad_setup->inverse_diff[x_e_ct] = 1. / (x_int_XHII[x_e_ct + 1] - x_int_XHII[x_e_ct]);
+            for (x_e_ct = 0; x_e_ct < x_int_NXHII - 1; x_e_ct++) {
+                rad_setup->inverse_diff[x_e_ct] = 1. / (x_int_XHII[x_e_ct + 1] - x_int_XHII[x_e_ct]);
+            }
         }
     }
 
@@ -375,14 +412,29 @@ int SetupRadiationFields(float redshift, TsBox *previous_spin_temp,
         calculate_spectral_factors(redshift, rad_setup);
 
         double x_e_ave_p = 0.0;
-#pragma omp parallel num_threads(simulation_options_global->N_THREADS)
-        {
-#pragma omp for reduction(+ : x_e_ave_p)
-            for (box_ct = 0; box_ct < HII_TOT_NUM_PIXELS; box_ct++) {
-                x_e_ave_p += previous_spin_temp->xray_ionised_fraction[box_ct];
+        bool cuda_mean_ok = false;
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            double x_e_ave_cuda = 0.0;
+            int cuda_stat = p21_cuda_setup_radiation_mean_xe(previous_spin_temp, &x_e_ave_cuda);
+            if (cuda_stat == 0) {
+                rad_setup->x_e_ave_zp = x_e_ave_cuda;
+                cuda_mean_ok = true;
+            } else if (cuda_stat > 0) {
+                Throw(cuda_stat);
             }
         }
-        rad_setup->x_e_ave_zp = x_e_ave_p / (float)HII_TOT_NUM_PIXELS;
+#endif
+        if (!cuda_mean_ok) {
+#pragma omp parallel num_threads(simulation_options_global->N_THREADS)
+            {
+#pragma omp for reduction(+ : x_e_ave_p)
+                for (box_ct = 0; box_ct < HII_TOT_NUM_PIXELS; box_ct++) {
+                    x_e_ave_p += previous_spin_temp->xray_ionised_fraction[box_ct];
+                }
+            }
+            rad_setup->x_e_ave_zp = x_e_ave_p / (float)HII_TOT_NUM_PIXELS;
+        }
         LOG_DEBUG("Prev Box: x_e_ave %.3e", rad_setup->x_e_ave_zp);
 
         // this should initialise and use the global tables (given box average turnovers)
@@ -390,6 +442,14 @@ int SetupRadiationFields(float redshift, TsBox *previous_spin_temp,
         //   ion_eff) global SFRD at each filter radius (numerator of ST_over_PS factor)
 
         rad_setup->NO_LIGHT = global_reion_properties(redshift, rad_setup);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_setup_radiation_tables(previous_spin_temp, rad_setup);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
 #pragma omp parallel private(box_ct) num_threads(simulation_options_global -> N_THREADS)
         {

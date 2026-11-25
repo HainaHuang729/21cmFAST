@@ -13,7 +13,10 @@ import numpy as np
 from astropy import constants
 from astropy import units as un
 
+from .._cfg import config
+from ..c_21cmfast import ffi, lib
 from ..wrapper.arrays import Array
+from ..wrapper.exceptions import _process_exitcode
 from ..wrapper.inputs import InputParameters
 from ..wrapper.outputs import (
     BrightnessTemp,
@@ -643,9 +646,9 @@ def setup_radiation_fields(
                         redshift=rad_setup.zpp_avg[i],
                         need_c=False,
                     )
-                    rad_setup.ave_log10_MturnLW[i] = (
-                        emissivity_fields_interp.log10_mturn_mcg_ave
-                    )
+                    rad_setup.ave_log10_MturnLW[
+                        i
+                    ] = emissivity_fields_interp.log10_mturn_mcg_ave
 
         rad_setup.compute(
             redshift=redshift,
@@ -659,6 +662,128 @@ def setup_radiation_fields(
 # NOTE: the current implementation of this box is very hacky, since I have trouble figuring out a way to _compute()
 #   over multiple redshifts in a nice way using this wrapper.
 # TODO: if we move some code to jax or similar I think this would be one of the first candidates (just filling out some filtered grids)
+def _compute_radiation_fields_cuda(
+    *,
+    redshift: float,
+    inputs: InputParameters,
+    emissivity_fields_list: list[EmissivityFields],
+    interp_fields: list[str],
+    rad_setup: RadiationFieldsSetup,
+    R_star: un.Quantity,
+    perturbed_field: PerturbedField,
+    previous_spin_temp: TsBox,
+    radiation_fields: RadiationFields,
+) -> bool:
+    """Compute all radiation shells in one GPU batch when the native CUDA backend is enabled."""
+    if not (
+        config["USE_CUDA"]
+        and inputs.simulation_options.HII_DIM > 1
+        and lib.p21_cuda_is_compiled()
+        and lib.p21_cuda_is_available()
+        and lib.p21_cuda_get_enabled()
+    ):
+        return False
+
+    ef_asc = emissivity_fields_list[::-1]
+    z_halos = [ef.redshift for ef in ef_asc]
+    if not np.all(np.diff(z_halos) > 0):
+        raise ValueError("emissivity_fields must be in ascending order of redshift")
+
+    arr_fields = [f for f in interp_fields if f in ef_asc[0].arrays]
+    computed = [ef.ensure_arrays_computed(*arr_fields) for ef in ef_asc]
+    if not all(computed):
+        raise ValueError("Some of the emissivity fields required are not computed")
+
+    check_output_consistency(
+        dict(
+            zip(
+                [f"box-{idx}" for idx in range(len(ef_asc))],
+                ef_asc,
+                strict=True,
+            )
+        )
+    )
+
+    shell_r_ct: list[int] = []
+    shell_weights: list[float] = []
+    shell_desc: list[EmissivityFields] = []
+    shell_prog: list[EmissivityFields] = []
+    for i in range(inputs.astro_params.N_STEP_TS)[::-1]:
+        z_target = float(rad_setup.zpp_avg[i])
+        if z_target >= rad_setup.source_z_max:
+            logger.debug(f"ignoring Radius {i} which is above Z_HEAT_MAX")
+            continue
+        if z_target > z_halos[-1] or z_target < z_halos[0]:
+            raise ValueError(
+                f"Invalid z_target {z_target} for redshift array {z_halos}"
+            )
+        idx_prog = int(np.searchsorted(z_halos, z_target, side="left"))
+        if idx_prog == 0 or idx_prog == len(z_halos):
+            logger.debug(
+                f"redshift {z_target} beyond limits, {z_halos[0], z_halos[-1]}"
+            )
+            raise ValueError
+        idx_desc = idx_prog - 1
+        z_prog = z_halos[idx_prog]
+        z_desc = z_halos[idx_desc]
+        shell_r_ct.append(i)
+        shell_weights.append((z_target - z_desc) / (z_prog - z_desc))
+        shell_desc.append(ef_asc[idx_desc])
+        shell_prog.append(ef_asc[idx_prog])
+
+    if not (shell_r_ct and shell_r_ct[-1] == 0):
+        return False
+
+    radiation_fields._ensure_arguments_exist(
+        rad_setup, perturbed_field, previous_spin_temp
+    )
+    for box in (radiation_fields, rad_setup, perturbed_field, previous_spin_temp):
+        box.push_to_backend()
+    pushed_ids: set[int] = set()
+    for ef in (*shell_desc, *shell_prog):
+        if id(ef) not in pushed_ids:
+            for field in arr_fields:
+                ef.get(field)
+            ef.push_to_backend()
+            pushed_ids.add(id(ef))
+
+    n_shells = len(shell_r_ct)
+    r_ct_c = ffi.new("int[]", shell_r_ct)
+    w_c = ffi.new("double[]", shell_weights)
+    ef_desc_c = ffi.new("EmissivityFields *[]", [ef._cstruct for ef in shell_desc])
+    ef_prog_c = ffi.new("EmissivityFields *[]", [ef._cstruct for ef in shell_prog])
+    exitcode = lib.p21_cuda_compute_radiation_shells(
+        float(redshift),
+        n_shells,
+        r_ct_c,
+        float(R_star.to("Mpc").value),
+        w_c,
+        ef_desc_c,
+        ef_prog_c,
+        rad_setup._cstruct,
+        perturbed_field._cstruct,
+        previous_spin_temp._cstruct,
+        radiation_fields._cstruct,
+    )
+    if exitcode > 0:
+        _process_exitcode(
+            exitcode,
+            lib.p21_cuda_compute_radiation_shells,
+            (
+                redshift,
+                perturbed_field,
+                previous_spin_temp,
+                rad_setup,
+            ),
+        )
+    if exitcode == 0:
+        for name, array in radiation_fields.arrays.items():
+            setattr(radiation_fields, name, array.computed())
+        radiation_fields.pull_from_backend()
+        return True
+    return False
+
+
 @single_field_func
 @init_c_state(broadcast_inputs=True)
 def compute_radiation_fields(
@@ -808,27 +933,40 @@ def compute_radiation_fields(
         # entered the C code at the last iteration, due to the logic below.
         # Note that we always enter the C code at the smallest shell, since if z_avg.min would have been larger than source_z_max,
         # this would have been caught earlier by the need_c logic.
-        for i in range(inputs.astro_params.N_STEP_TS)[::-1]:
-            if rad_setup.zpp_avg[i] >= rad_setup.source_z_max:
-                logger.debug(f"ignoring Radius {i} which is above Z_HEAT_MAX")
-            else:
-                emissivity_fields_interp = interp_emissivity_fields(
-                    emissivity_fields_list=emissivity_fields_list[::-1],
-                    interp_fields=interp_fields,
-                    redshift=rad_setup.zpp_avg[i],
-                    need_c=True,
-                )
-                radiation_fields = radiation_fields.compute(
-                    redshift=redshift,
-                    emissivity_fields=emissivity_fields_interp,
-                    R_ct=i,
-                    R_star=R_star.to("Mpc").value,
-                    perturbed_field=perturbed_field,
-                    previous_spin_temp=previous_spin_temp,
-                    rad_setup=rad_setup,
-                    allow_already_computed=True,
-                )
-                emissivity_fields_interp.purge(force=True)
+        cuda_batched = _compute_radiation_fields_cuda(
+            redshift=redshift,
+            inputs=inputs,
+            emissivity_fields_list=emissivity_fields_list,
+            interp_fields=interp_fields,
+            rad_setup=rad_setup,
+            R_star=R_star,
+            perturbed_field=perturbed_field,
+            previous_spin_temp=previous_spin_temp,
+            radiation_fields=radiation_fields,
+        )
+
+        if not cuda_batched:
+            for i in range(inputs.astro_params.N_STEP_TS)[::-1]:
+                if rad_setup.zpp_avg[i] >= rad_setup.source_z_max:
+                    logger.debug(f"ignoring Radius {i} which is above Z_HEAT_MAX")
+                else:
+                    emissivity_fields_interp = interp_emissivity_fields(
+                        emissivity_fields_list=emissivity_fields_list[::-1],
+                        interp_fields=interp_fields,
+                        redshift=rad_setup.zpp_avg[i],
+                        need_c=True,
+                    )
+                    radiation_fields = radiation_fields.compute(
+                        redshift=redshift,
+                        emissivity_fields=emissivity_fields_interp,
+                        R_ct=i,
+                        R_star=R_star.to("Mpc").value,
+                        perturbed_field=perturbed_field,
+                        previous_spin_temp=previous_spin_temp,
+                        rad_setup=rad_setup,
+                        allow_already_computed=True,
+                    )
+                    emissivity_fields_interp.purge(force=True)
     else:
         # Sometimes we don't compute at all
         # (if the first zpp > source_z_max or there are no halos at max R)

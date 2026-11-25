@@ -13,6 +13,7 @@
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "dft.h"
 #include "exceptions.h"
@@ -408,6 +409,14 @@ int ComputePerturbedField(float redshift, InitialConditions *boxes,
 #endif
 
         omp_set_num_threads(simulation_options_global->N_THREADS);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_compute_perturbed_field(redshift, boxes, perturbed_field);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
         fftwf_complex *HIRES_density_perturb = NULL;
         fftwf_complex *LOWRES_density_perturb, *density_perturb_saved;

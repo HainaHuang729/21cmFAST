@@ -7,6 +7,7 @@ import yaml
 
 import py21cmfast as p21
 from py21cmfast._cfg import Config, ConfigurationError
+from py21cmfast.c_21cmfast import lib
 
 
 @pytest.fixture(scope="module")
@@ -41,6 +42,8 @@ def restore_backend():
     yield
     for k in p21.config._c_config_settings:
         p21.config._pass_to_backend(k, p21.config[k])
+    lib.p21_cuda_set_enabled(int(bool(p21.config["USE_CUDA"])))
+    lib.p21_cuda_set_fast_halo_sampler(int(bool(p21.config["CUDA_FAST_HALO_SAMPLER"])))
 
 
 def test_config_write_paths(cfgdir):

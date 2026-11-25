@@ -12,3 +12,4 @@
 #include "OutputStructs.h"
 #include "_functionprototypes_wrapper.h"
 #include "photoncons.h"
+#include "cuda/cuda_api.h"

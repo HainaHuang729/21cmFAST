@@ -2,7 +2,36 @@
 #define _INTERP_TABLES_H
 
 #include "InputParameters.h"
+#include "interpolation.h"
 #include "scaling_relations.h"
+
+typedef struct P21ConditionalTables {
+    const RGTable1D_f *sfrd_1d_acg;
+    const RGTable2D_f *sfrd_2d_acg;
+    const RGTable2D_f *sfrd_2d_mcg;
+    const RGTable1D_f *xray_1d_acg;
+    const RGTable2D_f *xray_2d_acg;
+    const RGTable2D_f *xray_2d_mcg;
+    const RGTable1D_f *nion_1d_acg;
+    const RGTable2D_f *nion_2d_acg;
+    const RGTable2D_f *nion_2d_mcg;
+    const RGTable2D_f *nion_2d_acg_prev;
+    const RGTable2D_f *nion_2d_mcg_prev;
+    const RGTable1D *nhalo_1d;
+    const RGTable1D *fcoll_1d;
+} P21ConditionalTables;
+
+typedef struct P21SamplerTables {
+    const RGTable1D_f *sigma_1d;
+    const RGTable1D_f *dsigmasqdm_1d;
+    const RGTable1D *nhalo_1d;
+    const RGTable1D *fcoll_1d;
+    const RGTable2D *nhalo_inv_2d;
+    const RGTable1D *j_split_1d;
+} P21SamplerTables;
+
+void p21_get_conditional_tables(P21ConditionalTables *out);
+void p21_get_sampler_tables(P21SamplerTables *out);
 
 // Functions within interp_tables.c need the parameter structures, but we don't want to pass them
 // all down the chain, so we broadcast them

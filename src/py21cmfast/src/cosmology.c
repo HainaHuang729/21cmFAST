@@ -46,6 +46,7 @@ struct CosmoConstants {
 };
 
 static struct CosmoConstants cosmo_consts;
+static double class_eh_ratio_at_kmax = 0.0;
 
 // NOTE: All Transfer functions take k in Mpc^-1, and convert to hMpc^-1 internally
 //  FUNCTION TFmdm is the power spectrum transfer function from Eisenstein & Hu ApJ, 1999, 511, 5
@@ -156,6 +157,7 @@ double transfer_function_CLASS(double k, int flag_int, int flag_dv) {
         eh_ratio_at_kmax = Tmclass[size_density - 1] / kclass[size_density - 1] /
                            kclass[size_density - 1] /
                            transfer_function_EH(kclass[size_density - 1]);
+        class_eh_ratio_at_kmax = eh_ratio_at_kmax;
 
         if (matter_options_global->V_CB_MODEL == V_CB_MODEL_FLUCTS) {
             Tvclass_vcb = cosmo_tables_global->transfer_vcb->y_values;
@@ -777,3 +779,15 @@ double t_hubble(float z) { return 1.0 / hubble(z); }
 
 /* comoving distance (in cm) per unit redshift */
 double drdz(float z) { return (1.0 + z) * physconst.c_cms * dtdz(z); }
+
+void p21_get_cosmo_constants(double out[9]) {
+    out[0] = cosmo_consts.sound_horizon;
+    out[1] = cosmo_consts.alpha_nu;
+    out[2] = cosmo_consts.beta_c;
+    out[3] = cosmo_consts.omhh;
+    out[4] = cosmo_consts.f_nu;
+    out[5] = cosmo_consts.f_baryon;
+    out[6] = cosmo_consts.theta_cmb;
+    out[7] = cosmo_consts.sigma_norm;
+    out[8] = class_eh_ratio_at_kmax;
+}

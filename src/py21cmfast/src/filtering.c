@@ -497,3 +497,13 @@ double test_beta_for_multiple_scattering_straight_line_limit(void) {
     initialize_alphas_and_betas_for_multiple_scattering(1., 0., 0., &consts_for_ms);
     return consts_for_ms.beta_inner;
 }
+
+void p21_get_ms_filter_params(double R_inner, double R_outer, double R_star,
+                              double out_alpha_beta[4]) {
+    struct multiple_scattering_params consts_for_ms;
+    initialize_alphas_and_betas_for_multiple_scattering(R_inner, R_outer, R_star, &consts_for_ms);
+    out_alpha_beta[0] = consts_for_ms.alpha_inner;
+    out_alpha_beta[1] = consts_for_ms.beta_inner;
+    out_alpha_beta[2] = consts_for_ms.alpha_outer;
+    out_alpha_beta[3] = consts_for_ms.beta_outer;
+}

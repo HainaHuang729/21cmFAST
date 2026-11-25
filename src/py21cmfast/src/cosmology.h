@@ -31,5 +31,6 @@ double drdz(float z); /* comoving distance, (1+z)*C*dtdz(in cm) per unit z */
 double hubble(float z);
 double t_hubble(float z);
 double M_J_WDM();
+void p21_get_cosmo_constants(double out[9]);
 
 #endif

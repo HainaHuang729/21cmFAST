@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "Constants.h"
 #include "InitialConditions.h"
@@ -18,6 +19,7 @@
 #include "bubble_helper_progs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "dft.h"
 #include "exceptions.h"
@@ -1349,6 +1351,8 @@ int ComputeIonizedBox(float redshift, float prev_redshift, PerturbedField *pertu
                       TsBox *spin_temp, EmissivityFields *emissivity_fields,
                       InitialConditions *ini_boxes, IonizedBox *box) {
     int status;
+    P21CudaIonCtx *cuda_ctx = NULL;
+    struct RadiusSpec *radii_spec = NULL;
 
     Try {  // This Try brackets the whole function, so we don't indent.
         LOG_DEBUG("input values:");
@@ -1371,18 +1375,6 @@ int ComputeIonizedBox(float redshift, float prev_redshift, PerturbedField *pertu
 
         struct IonBoxConstants ionbox_constants;
         set_ionbox_constants(redshift, prev_redshift, &ionbox_constants);
-
-#pragma omp parallel shared(box) private(ct) num_threads(simulation_options_global -> N_THREADS)
-        {
-#pragma omp for
-            for (ct = 0; ct < HII_TOT_NUM_PIXELS; ct++) {
-                box->z_reion[ct] = -1.0;
-            }
-        }
-
-        LOG_SUPER_DEBUG("z_reion init: ");
-        debugSummarizeBox(box->z_reion, simulation_options_global->HII_DIM,
-                          simulation_options_global->HII_DIM, HII_D_PARA, STANDARD_LAYOUT, "  ");
 
         // Modify the current sampled redshift to a redshift which matches the expected filling
         // factor given our astrophysical parameterisation. This is the photon non-conservation
@@ -1411,9 +1403,238 @@ int ComputeIonizedBox(float redshift, float prev_redshift, PerturbedField *pertu
         }
         /////////////////////////////////   BEGIN INITIALIZATION //////////////////////////////////
 
-        struct RadiusSpec *radii_spec;
         int n_radii;
         n_radii = setup_radii(&radii_spec, &ionbox_constants);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled() && (simulation_options_global->HII_DIM > 1) &&
+            (ionbox_constants.lagrangian_source_grids ||
+             uses_hmf_interpolation(matter_options_global->USE_INTERPOLATION_TABLES))) {
+            P21IonBoxParams cuda_params;
+            memset(&cuda_params, 0, sizeof(cuda_params));
+            cuda_params.redshift = ionbox_constants.redshift;
+            cuda_params.stored_redshift = ionbox_constants.stored_redshift;
+            cuda_params.prev_redshift = ionbox_constants.prev_redshift;
+            cuda_params.growth_factor = ionbox_constants.growth_factor;
+            cuda_params.prev_growth_factor = ionbox_constants.prev_growth_factor;
+            cuda_params.photoncons_adjustment_factor =
+                ionbox_constants.photoncons_adjustment_factor;
+            cuda_params.dz = ionbox_constants.dz;
+            cuda_params.fabs_dtdz = ionbox_constants.fabs_dtdz;
+            cuda_params.fix_mean = ionbox_constants.fix_mean ? 1 : 0;
+            cuda_params.mass_dep_zeta = ionbox_constants.mass_dep_zeta ? 1 : 0;
+            cuda_params.filter_recombinations = ionbox_constants.filter_recombinations ? 1 : 0;
+            cuda_params.lagrangian_source_grids =
+                ionbox_constants.lagrangian_source_grids ? 1 : 0;
+            cuda_params.need_mcgs_nion = ionbox_constants.need_mcgs_nion ? 1 : 0;
+            cuda_params.hii_filter = ionbox_constants.hii_filter;
+            cuda_params.T_re = ionbox_constants.T_re;
+            cuda_params.mfp_meandens = ionbox_constants.mfp_meandens;
+            cuda_params.gamma_prefactor = ionbox_constants.gamma_prefactor;
+            cuda_params.nion_prefactor_acg = ionbox_constants.nion_prefactor_acg;
+            cuda_params.nion_prefactor_mcg = ionbox_constants.nion_prefactor_mcg;
+            cuda_params.TK_nofluct = ionbox_constants.TK_nofluct;
+            cuda_params.adia_TK_term = ionbox_constants.adia_TK_term;
+            cuda_params.M_min = ionbox_constants.M_min;
+            cuda_params.vcb_const = ionbox_constants.scale_consts.vcb_const;
+            cuda_params.mturn_acg_homogeneous =
+                ionbox_constants.scale_consts.mturn_acg_homogeneous;
+            cuda_params.atomic_cooling_threshold =
+                ionbox_constants.scale_consts.atomic_cooling_threshold;
+
+            cuda_ctx = p21_cuda_ion_begin(&cuda_params, n_radii, perturbed_field,
+                                          previous_perturbed_field, previous_ionize_box, spin_temp,
+                                          emissivity_fields, ini_boxes);
+            if (cuda_ctx != NULL) {
+                if (prev_redshift < 1 && astro_options_global->USE_MCGS) {
+                    previous_ionize_box->nion_unconditional_acg = 0.0;
+                    previous_ionize_box->nion_unconditional_mcg = 0.0;
+                }
+
+                double mturn_acg_avg = 0., mturn_mcg_avg = 0.;
+                if (ionbox_constants.lagrangian_source_grids) {
+                    box->log10_mturn_ave_acg = emissivity_fields->log10_mturn_acg_ave;
+                    box->log10_mturn_ave_mcg = emissivity_fields->log10_mturn_mcg_ave;
+                    mturn_acg_avg = pow(10., emissivity_fields->log10_mturn_acg_ave);
+                    mturn_mcg_avg = pow(10., emissivity_fields->log10_mturn_mcg_ave);
+                } else if (ionbox_constants.mass_dep_zeta) {
+                    int mstat = p21_cuda_ion_calc_mcrit(cuda_ctx, &cuda_params,
+                                                        &(box->log10_mturn_ave_acg),
+                                                        &(box->log10_mturn_ave_mcg));
+                    if (mstat != 0) Throw(mstat > 0 ? mstat : MemoryAllocError);
+                    mturn_acg_avg = pow(10., box->log10_mturn_ave_acg);
+                    mturn_mcg_avg = pow(10., box->log10_mturn_ave_mcg);
+                } else {
+                    mturn_acg_avg = ionbox_constants.M_min;
+                    box->log10_mturn_ave_acg = log10(ionbox_constants.M_min);
+                    box->log10_mturn_ave_mcg = 0.0;
+                }
+
+                global_xH = 0.0;
+                if (astro_options_global->INTEGRATION_METHOD_ACGS ==
+                        INTEGRATION_METHOD_GAUSS_LEGENDRE ||
+                    (astro_options_global->USE_MCGS &&
+                     astro_options_global->INTEGRATION_METHOD_MCGS ==
+                         INTEGRATION_METHOD_GAUSS_LEGENDRE)) {
+                    initialise_GL(ionbox_constants.lnMmin, ionbox_constants.lnMmax_gl);
+                }
+
+                double nion_limit_acg = 0., nion_limit_mcg = 0.;
+                set_unconditional_nion(&ionbox_constants, previous_ionize_box, box, mturn_acg_avg,
+                                       mturn_mcg_avg, &nion_limit_acg, &nion_limit_mcg);
+                double unconditional_nion =
+                    box->nion_unconditional_acg + box->nion_unconditional_mcg;
+
+                if (unconditional_nion < HII_ROUND_ERR) {
+                    double xion_rf =
+                        astro_options_global->USE_TS_FLUCT
+                            ? 0.0
+                            : xion_RECFAST(ionbox_constants.redshift, 0);
+                    int nstat = p21_cuda_ion_set_fully_neutral(cuda_ctx, &cuda_params, xion_rf,
+                                                               box, &global_xH);
+                    if (nstat != 0) Throw(nstat > 0 ? nstat : MemoryAllocError);
+                } else {
+                    int r2c_stat = p21_cuda_ion_prepare_r2c(cuda_ctx, &cuda_params);
+                    if (r2c_stat != 0) Throw(r2c_stat > 0 ? r2c_stat : MemoryAllocError);
+
+                    P21IonRadiusSpec cuda_radius;
+                    memset(&cuda_radius, 0, sizeof(cuda_radius));
+                    int R_ct;
+                    float prev_homo_nrec =
+                        (astro_options_global->RECOMB_MODEL == RECOMB_MODEL_HOMOGENEOUS &&
+                         prev_redshift >= 1)
+                            ? previous_ionize_box->cumulative_recombinations[0]
+                            : 0.0f;
+
+                    for (R_ct = n_radii; R_ct--;) {
+                        struct RadiusSpec curr_radius = radii_spec[R_ct];
+                        if (ionbox_constants.M_min > RtoM(curr_radius.R)) {
+                            LOG_DEBUG(
+                                "Radius %.2e Mass %.2e smaller than minimum %.2e, stopping...",
+                                radii_spec[R_ct].R, radii_spec[R_ct].M_max_R,
+                                ionbox_constants.M_min);
+                            break;
+                        }
+                        cuda_radius.R = curr_radius.R;
+                        cuda_radius.M_max_R = curr_radius.M_max_R;
+                        cuda_radius.ln_M_max_R = curr_radius.ln_M_max_R;
+                        cuda_radius.sigma_maxmass = curr_radius.sigma_maxmass;
+                        cuda_radius.R_index = curr_radius.R_index;
+                        cuda_radius.nion_conditional_ave_acg = 0.;
+                        cuda_radius.nion_conditional_ave_mcg = 0.;
+
+                        double min_density = 0., max_density = 0.;
+                        double prev_min_density = 0., prev_max_density = 0.;
+                        int fstat = p21_cuda_ion_filter_and_extrema(
+                            cuda_ctx, &cuda_params, &cuda_radius, &min_density, &max_density,
+                            &prev_min_density, &prev_max_density);
+                        if (fstat != 0) Throw(fstat > 0 ? fstat : MemoryAllocError);
+
+                        bool need_prev_ion =
+                            astro_options_global->USE_MCGS &&
+                            (previous_ionize_box->nion_unconditional_mcg +
+                                 previous_ionize_box->nion_unconditional_acg >
+                             1e-4);
+
+                        if (!ionbox_constants.lagrangian_source_grids) {
+                            if (astro_options_global->INTEGRATION_METHOD_ACGS ==
+                                    INTEGRATION_METHOD_GAUSS_LEGENDRE ||
+                                (astro_options_global->USE_MCGS &&
+                                 astro_options_global->INTEGRATION_METHOD_MCGS ==
+                                     INTEGRATION_METHOD_GAUSS_LEGENDRE)) {
+                                initialise_GL(ionbox_constants.lnMmin, curr_radius.ln_M_max_R);
+                            }
+                            initialize_nion_conditional_tables(
+                                ionbox_constants.redshift, min_density, max_density,
+                                ionbox_constants.M_min, curr_radius.M_max_R,
+                                curr_radius.M_max_R, &(ionbox_constants.scale_consts), false);
+                            if (need_prev_ion && astro_options_global->USE_MCGS) {
+                                initialize_nion_conditional_tables(
+                                    ionbox_constants.prev_redshift, prev_min_density,
+                                    prev_max_density, ionbox_constants.M_min, curr_radius.M_max_R,
+                                    curr_radius.M_max_R, &(ionbox_constants.scale_consts), true);
+                            }
+                        }
+
+                        int cstat = p21_cuda_ion_calc_cond_nion(cuda_ctx, &cuda_params,
+                                                                &cuda_radius, need_prev_ion ? 1 : 0);
+                        if (cstat != 0) Throw(cstat > 0 ? cstat : MemoryAllocError);
+
+                        if (ionbox_constants.mass_dep_zeta) {
+                            if (cuda_radius.nion_conditional_ave_acg <= nion_limit_acg)
+                                cuda_radius.nion_conditional_ave_acg = nion_limit_acg;
+                            if (astro_options_global->USE_MCGS &&
+                                cuda_radius.nion_conditional_ave_mcg <= nion_limit_mcg)
+                                cuda_radius.nion_conditional_ave_mcg = nion_limit_mcg;
+                        } else {
+                            if (cuda_radius.nion_conditional_ave_acg <= FRACT_FLOAT_ERR)
+                                cuda_radius.nion_conditional_ave_acg = FRACT_FLOAT_ERR;
+                        }
+
+                        int rstat = p21_cuda_ion_find_regions(
+                            cuda_ctx, &cuda_params, &cuda_radius, box->nion_unconditional_acg,
+                            box->nion_unconditional_mcg, nion_limit_acg, nion_limit_mcg,
+                            prev_homo_nrec);
+                        if (rstat != 0) Throw(rstat > 0 ? rstat : MemoryAllocError);
+                    }
+
+                    int tstat = p21_cuda_ion_set_ionized_temps(cuda_ctx, &cuda_params);
+                    if (tstat != 0) Throw(tstat > 0 ? tstat : MemoryAllocError);
+
+                    float global_photoionization_rate = 0.;
+                    int gstat = p21_cuda_ion_global_means(cuda_ctx, &global_xH,
+                                                          &global_photoionization_rate);
+                    if (gstat != 0) Throw(gstat > 0 ? gstat : MemoryAllocError);
+
+                    if (astro_options_global->RECOMB_MODEL == RECOMB_MODEL_HOMOGENEOUS) {
+                        double dNrec_global =
+                            splined_recombination_rate(ionbox_constants.stored_redshift,
+                                                       global_photoionization_rate) *
+                            ionbox_constants.fabs_dtdz * ionbox_constants.dz * (1. - global_xH);
+                        double cumulative_recomb_global =
+                            ((prev_redshift >= 1)
+                                 ? previous_ionize_box->cumulative_recombinations[0]
+                                 : 0.0) +
+                            dNrec_global;
+                        if (isfinite(cumulative_recomb_global) == 0) Throw(InfinityorNaNError);
+                        box->cumulative_recombinations[0] = cumulative_recomb_global;
+                    } else if (astro_options_global->RECOMB_MODEL == RECOMB_MODEL_INHOMOGENEOUS) {
+                        int irec_stat = p21_cuda_ion_recomb_inhomo(cuda_ctx, &cuda_params);
+                        if (irec_stat != 0) Throw(irec_stat > 0 ? irec_stat : MemoryAllocError);
+                    }
+
+                    if (!ionbox_constants.fix_mean) {
+                        box->nion_unconditional_acg = cuda_radius.nion_conditional_ave_acg;
+                        box->nion_unconditional_mcg = cuda_radius.nion_conditional_ave_mcg;
+                    }
+
+                    int fin_stat = p21_cuda_ion_finish(cuda_ctx, &cuda_params, box);
+                    if (fin_stat != 0) Throw(fin_stat > 0 ? fin_stat : MemoryAllocError);
+                }
+
+                LOG_DEBUG("global_xH = %e", global_xH);
+                p21_cuda_ion_end(cuda_ctx);
+                cuda_ctx = NULL;
+                free_conditional_tables();
+                free(radii_spec);
+                radii_spec = NULL;
+                LOG_DEBUG("finished!\n");
+                return 0;
+            }
+        }
+#endif
+
+#pragma omp parallel shared(box) private(ct) num_threads(simulation_options_global -> N_THREADS)
+        {
+#pragma omp for
+            for (ct = 0; ct < HII_TOT_NUM_PIXELS; ct++) {
+                box->z_reion[ct] = -1.0;
+            }
+        }
+
+        LOG_SUPER_DEBUG("z_reion init: ");
+        debugSummarizeBox(box->z_reion, simulation_options_global->HII_DIM,
+                          simulation_options_global->HII_DIM, HII_D_PARA, STANDARD_LAYOUT, "  ");
 
         // CONSTRUCT GRIDS OUTSIDE R LOOP HERE
         // if we don't have a previous ionised box, make a fake one here
@@ -1638,6 +1859,13 @@ int ComputeIonizedBox(float redshift, float prev_redshift, PerturbedField *pertu
 
     }  // End of Try()
 
-    Catch(status) { return (status); }
+    Catch(status) {
+        if (cuda_ctx) {
+            p21_cuda_ion_end(cuda_ctx);
+        }
+        free_conditional_tables();
+        free(radii_spec);
+        return (status);
+    }
     return (0);
 }

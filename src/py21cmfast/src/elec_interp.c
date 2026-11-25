@@ -33,6 +33,7 @@ static float x_int_n_Lya[x_int_NXHII][x_int_NENERGY];
 static float x_int_nion_HI[x_int_NXHII][x_int_NENERGY];
 static float x_int_nion_HeI[x_int_NXHII][x_int_NENERGY];
 static float x_int_nion_HeII[x_int_NXHII][x_int_NENERGY];
+static bool elec_interp_initialized = false;
 
 void skipline(FILE *fl, int n) {
     int i;
@@ -112,8 +113,26 @@ void initialize_interp_arrays() {
         fclose(input_file);
     }
     LOG_SUPER_DEBUG("Done reading x_int_tables.");
+    elec_interp_initialized = true;
 
     return;
+}
+
+int p21_get_elec_interp_tables(const float **xhii_out, const float **energy_out,
+                               const float **fheat_out, const float **nlya_out,
+                               const float **nion_hi_out, const float **nion_hei_out,
+                               const float **nion_heii_out) {
+    if (!elec_interp_initialized) {
+        return 0;
+    }
+    if (xhii_out) *xhii_out = &x_int_XHII[0];
+    if (energy_out) *energy_out = &x_int_Energy[0];
+    if (fheat_out) *fheat_out = &x_int_fheat[0][0];
+    if (nlya_out) *nlya_out = &x_int_n_Lya[0][0];
+    if (nion_hi_out) *nion_hi_out = &x_int_nion_HI[0][0];
+    if (nion_hei_out) *nion_hei_out = &x_int_nion_HeI[0][0];
+    if (nion_heii_out) *nion_heii_out = &x_int_nion_HeII[0][0];
+    return 1;
 }
 
 // Function to compute fheat for an interacting electron, given energy En and IGM ionized fraction

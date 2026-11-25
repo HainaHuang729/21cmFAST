@@ -1,0 +1,447 @@
+{
+  "generated_at": "2026-11-25T03:48:21.430331+00:00",
+  "spec": {
+    "dim": 192,
+    "hii_dim": 64,
+    "box_len_Mpc": 200.0,
+    "nodes": 43,
+    "seed": 424242,
+    "recomb_model": "inhomogeneous",
+    "use_ts_fluct": true
+  },
+  "phase0_reference": {
+    "cpu_phase0_s": 65.77935682691168,
+    "cupy_cufft_cold_s": 11.539228803943843,
+    "cupy_cufft_warm_s": 10.33147444599308
+  },
+  "runs": {
+    "cuda_cold_t2": {
+      "tag": "cuda_cold_t2",
+      "use_cuda": true,
+      "n_threads": 2,
+      "nodes": 43,
+      "ic_seconds": 0.30959771503694355,
+      "lightcone_seconds": 7.625254868995398,
+      "compute_seconds": 7.934852584032342,
+      "total_with_save_seconds": 8.042783231008798,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 3631,
+        "mempool_free_calls": 3477,
+        "mempool_bytes_allocated": 9841384116,
+        "cufft_plan_hits": 8807,
+        "cufft_plan_misses": 4,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 3358,
+        "cufft_exec_c2r": 5453,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 7745,
+        "registry_misses": 12,
+        "registry_invalidations": 690,
+        "registry_h2d_bytes": 12582912,
+        "registry_d2h_bytes": 1242562560,
+        "ic_runs": 1,
+        "perturb_runs": 43,
+        "emissivity_runs": 43,
+        "radiation_setup_runs": 42,
+        "radiation_update_runs": 1631,
+        "spin_temp_runs": 43,
+        "ionization_runs": 43,
+        "brightness_runs": 43
+      }
+    },
+    "cuda_warm_t2": {
+      "tag": "cuda_warm_t2",
+      "use_cuda": true,
+      "n_threads": 2,
+      "nodes": 43,
+      "ic_seconds": 0.15042373700998724,
+      "lightcone_seconds": 7.598166230018251,
+      "compute_seconds": 7.748589967028238,
+      "total_with_save_seconds": 7.849172321031801,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 3631,
+        "mempool_free_calls": 3481,
+        "mempool_bytes_allocated": 9841384116,
+        "cufft_plan_hits": 8811,
+        "cufft_plan_misses": 0,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 3358,
+        "cufft_exec_c2r": 5453,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 7745,
+        "registry_misses": 12,
+        "registry_invalidations": 690,
+        "registry_h2d_bytes": 12582912,
+        "registry_d2h_bytes": 1242562560,
+        "ic_runs": 1,
+        "perturb_runs": 43,
+        "emissivity_runs": 43,
+        "radiation_setup_runs": 42,
+        "radiation_update_runs": 1631,
+        "spin_temp_runs": 43,
+        "ionization_runs": 43,
+        "brightness_runs": 43
+      }
+    },
+    "cuda_warm_t1": {
+      "tag": "cuda_warm_t1",
+      "use_cuda": true,
+      "n_threads": 1,
+      "nodes": 43,
+      "ic_seconds": 0.1414117719978094,
+      "lightcone_seconds": 8.96264904201962,
+      "compute_seconds": 9.10406081401743,
+      "total_with_save_seconds": 9.209764658939093,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 3623,
+        "mempool_free_calls": 3473,
+        "mempool_bytes_allocated": 9837896364,
+        "cufft_plan_hits": 8811,
+        "cufft_plan_misses": 0,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 3358,
+        "cufft_exec_c2r": 5453,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 7745,
+        "registry_misses": 12,
+        "registry_invalidations": 690,
+        "registry_h2d_bytes": 12582912,
+        "registry_d2h_bytes": 1242562560,
+        "ic_runs": 1,
+        "perturb_runs": 43,
+        "emissivity_runs": 43,
+        "radiation_setup_runs": 42,
+        "radiation_update_runs": 1631,
+        "spin_temp_runs": 43,
+        "ionization_runs": 43,
+        "brightness_runs": 43
+      }
+    },
+    "cpu_t2": {
+      "tag": "cpu_t2",
+      "use_cuda": false,
+      "n_threads": 2,
+      "nodes": 43,
+      "ic_seconds": 1.5159434230299667,
+      "lightcone_seconds": 59.880998064996675,
+      "compute_seconds": 61.39694148802664,
+      "total_with_save_seconds": 61.50359784299508,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 0,
+        "mempool_free_calls": 0,
+        "mempool_bytes_allocated": 0,
+        "cufft_plan_hits": 0,
+        "cufft_plan_misses": 0,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 0,
+        "cufft_exec_c2r": 0,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 0,
+        "registry_misses": 0,
+        "registry_invalidations": 0,
+        "registry_h2d_bytes": 0,
+        "registry_d2h_bytes": 0,
+        "ic_runs": 0,
+        "perturb_runs": 0,
+        "emissivity_runs": 0,
+        "radiation_setup_runs": 0,
+        "radiation_update_runs": 0,
+        "spin_temp_runs": 0,
+        "ionization_runs": 0,
+        "brightness_runs": 0
+      }
+    },
+    "cpu_t1": {
+      "tag": "cpu_t1",
+      "use_cuda": false,
+      "n_threads": 1,
+      "nodes": 43,
+      "ic_seconds": 2.4201984819956124,
+      "lightcone_seconds": 108.84267559903674,
+      "compute_seconds": 111.26287408103235,
+      "total_with_save_seconds": 111.3705319990404,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 0,
+        "mempool_free_calls": 0,
+        "mempool_bytes_allocated": 0,
+        "cufft_plan_hits": 0,
+        "cufft_plan_misses": 0,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 0,
+        "cufft_exec_c2r": 0,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 0,
+        "registry_misses": 0,
+        "registry_invalidations": 0,
+        "registry_h2d_bytes": 0,
+        "registry_d2h_bytes": 0,
+        "ic_runs": 0,
+        "perturb_runs": 0,
+        "emissivity_runs": 0,
+        "radiation_setup_runs": 0,
+        "radiation_update_runs": 0,
+        "spin_temp_runs": 0,
+        "ionization_runs": 0,
+        "brightness_runs": 0
+      }
+    },
+    "cpu_t4": {
+      "tag": "cpu_t4",
+      "use_cuda": false,
+      "n_threads": 4,
+      "nodes": 43,
+      "ic_seconds": 1.1431096540763974,
+      "lightcone_seconds": 36.54828266100958,
+      "compute_seconds": 37.69139231508598,
+      "total_with_save_seconds": 37.80068790609948,
+      "cuda_stats": {
+        "compiled": 1,
+        "enabled": 0,
+        "device_id": 0,
+        "sm_count": 84,
+        "free_mem_bytes": 49998659584,
+        "total_mem_bytes": 50925535232,
+        "mempool_alloc_calls": 0,
+        "mempool_free_calls": 0,
+        "mempool_bytes_allocated": 0,
+        "cufft_plan_hits": 0,
+        "cufft_plan_misses": 0,
+        "cufft_plan_evictions": 0,
+        "cufft_exec_r2c": 0,
+        "cufft_exec_c2r": 0,
+        "cufft_exec_c2c": 0,
+        "registry_hits": 0,
+        "registry_misses": 0,
+        "registry_invalidations": 0,
+        "registry_h2d_bytes": 0,
+        "registry_d2h_bytes": 0,
+        "ic_runs": 0,
+        "perturb_runs": 0,
+        "emissivity_runs": 0,
+        "radiation_setup_runs": 0,
+        "radiation_update_runs": 0,
+        "spin_temp_runs": 0,
+        "ionization_runs": 0,
+        "brightness_runs": 0
+      }
+    }
+  },
+  "speedups": {
+    "cpu_t2_compute_over_cuda_warm_t2_compute": 7.923627621190772,
+    "cpu_t2_total_over_cuda_warm_t2_total": 7.8356793974565475,
+    "cpu_t1_compute_over_cuda_warm_t1_compute": 12.22123581487088,
+    "cpu_t1_total_over_cuda_warm_t1_total": 12.092657752219868,
+    "cpu_t4_compute_over_cuda_warm_t2_compute": 4.8642904677457715,
+    "cpu_t4_total_over_cuda_warm_t2_total": 4.815882026798266,
+    "phase0_cpu_over_cuda_warm_t2_total": 8.380419506226964,
+    "phase0_cupy_warm_over_cuda_warm_t2_total": 1.316250175615328,
+    "cuda_warm_t2_total_over_phase0_cupy_warm": 0.7597339917029939
+  },
+  "accuracy_cuda_warm_t2_vs_cpu_t2": {
+    "lightcone_fields": {
+      "brightness_temp": {
+        "count": 2662400,
+        "max_abs": 0.011835098266601562,
+        "p99_9_abs": 0.005433369159698609,
+        "rel_rms": 2.0564321546829874e-05,
+        "max_rel_nonzero": 7.792621924948891,
+        "p99_9_rel_nonzero": 0.011616105815499699,
+        "strict_1e8_1e4_pct": 10.70038311298077,
+        "relaxed_1e5_1e4_pct": 10.555438701923077
+      },
+      "cumulative_recombinations": {
+        "count": 2662400,
+        "max_abs": 0.00362473726272583,
+        "p99_9_abs": 3.5762786865234375e-07,
+        "rel_rms": 2.2065615386728656e-05,
+        "max_rel_nonzero": 0.030432274688835054,
+        "p99_9_rel_nonzero": 6.637262971924524e-07,
+        "strict_1e8_1e4_pct": 0.0007887620192307692,
+        "relaxed_1e5_1e4_pct": 0.0007887620192307692
+      },
+      "kinetic_temp_neutral": {
+        "count": 2662400,
+        "max_abs": 0.83203125,
+        "p99_9_abs": 0.296630859375,
+        "rel_rms": 0.00010565561716706506,
+        "max_rel_nonzero": 0.0004899437566933397,
+        "p99_9_rel_nonzero": 0.00036446524029632577,
+        "strict_1e8_1e4_pct": 26.22716346153846,
+        "relaxed_1e5_1e4_pct": 26.206204927884617
+      },
+      "los_velocity": {
+        "count": 2662400,
+        "max_abs": 7.940933880509066e-23,
+        "p99_9_abs": 4.714929491552258e-23,
+        "rel_rms": 2.947220349413848e-07,
+        "max_rel_nonzero": 0.0,
+        "p99_9_rel_nonzero": 0.0,
+        "strict_1e8_1e4_pct": 0.0,
+        "relaxed_1e5_1e4_pct": 0.0
+      },
+      "neutral_fraction": {
+        "count": 2662400,
+        "max_abs": 4.708766937255859e-06,
+        "p99_9_abs": 2.516809850932125e-06,
+        "rel_rms": 4.3039663704766405e-07,
+        "max_rel_nonzero": 0.01597944099772094,
+        "p99_9_rel_nonzero": 4.342965937518525e-05,
+        "strict_1e8_1e4_pct": 0.03151292067307692,
+        "relaxed_1e5_1e4_pct": 0.0
+      },
+      "spin_temperature": {
+        "count": 2662400,
+        "max_abs": 0.3291015625,
+        "p99_9_abs": 0.1158447265625,
+        "rel_rms": 6.203540461879844e-05,
+        "max_rel_nonzero": 0.00045229031636842294,
+        "p99_9_rel_nonzero": 0.0003238850539881066,
+        "strict_1e8_1e4_pct": 9.726900540865385,
+        "relaxed_1e5_1e4_pct": 9.704439603365385
+      },
+      "tau_21": {
+        "count": 2662400,
+        "max_abs": 3.4989789128303528e-06,
+        "p99_9_abs": 1.8361965194346914e-06,
+        "rel_rms": 1.372078104529821e-05,
+        "max_rel_nonzero": 0.013176523138057002,
+        "p99_9_rel_nonzero": 0.00032262896612160854,
+        "strict_1e8_1e4_pct": 7.752741887019231,
+        "relaxed_1e5_1e4_pct": 0.0
+      },
+      "xray_ionised_fraction": {
+        "count": 2662400,
+        "max_abs": 1.6868114471435547e-05,
+        "p99_9_abs": 6.776303052902222e-06,
+        "rel_rms": 7.8366192204853e-05,
+        "max_rel_nonzero": 0.00024364626278071123,
+        "p99_9_rel_nonzero": 0.00018760240020700923,
+        "strict_1e8_1e4_pct": 5.228553185096154,
+        "relaxed_1e5_1e4_pct": 0.0
+      }
+    },
+    "global_quantities": {
+      "brightness_temp": {
+        "max_abs": 0.0010986328125,
+        "rel_rms": 1.1392236294335383e-05
+      },
+      "cumulative_recombinations": {
+        "max_abs": 1.1920928955078125e-07,
+        "rel_rms": 2.2666663709688334e-07
+      },
+      "density": {
+        "max_abs": 5.21540641784668e-08,
+        "rel_rms": 0.002788109308037251
+      },
+      "ionisation_rate_G12": {
+        "max_abs": 7.450580596923828e-08,
+        "rel_rms": 4.0503427521267104e-07
+      },
+      "kinetic_temp_neutral": {
+        "max_abs": 0.2652587890625,
+        "rel_rms": 9.628572627794698e-05
+      },
+      "kinetic_temperature": {
+        "max_abs": 0.060546875,
+        "rel_rms": 2.0858235111916436e-06
+      },
+      "log10_mturn_acg": {
+        "max_abs": 0.0,
+        "rel_rms": 0.0
+      },
+      "log10_mturn_mcg": {
+        "max_abs": 0.0,
+        "rel_rms": 0.0
+      },
+      "mean_free_path": {
+        "max_abs": 1.239776611328125e-05,
+        "rel_rms": 8.011002285195525e-07
+      },
+      "n_ion": {
+        "max_abs": 1.4901161193847656e-08,
+        "rel_rms": 5.685832601756296e-09
+      },
+      "neutral_fraction": {
+        "max_abs": 3.725290298461914e-07,
+        "rel_rms": 1.351100702669023e-07
+      },
+      "nion_conditional_filtered_acg": {
+        "max_abs": 8.344650268554688e-07,
+        "rel_rms": 4.964325621090915e-07
+      },
+      "sfrd_acg": {
+        "max_abs": 4.440892098500626e-16,
+        "rel_rms": 2.1445627888002335e-07
+      },
+      "spin_temperature": {
+        "max_abs": 0.08355712890625,
+        "rel_rms": 5.642412210703402e-05
+      },
+      "tau_21": {
+        "max_abs": 4.0442682802677155e-07,
+        "rel_rms": 6.047739669509136e-06
+      },
+      "velocity_x": {
+        "max_abs": 1.6543612251060553e-24,
+        "rel_rms": 0.0031557291733006984
+      },
+      "velocity_y": {
+        "max_abs": 3.3927329811745276e-25,
+        "rel_rms": 8.427165895394224e-05
+      },
+      "velocity_z": {
+        "max_abs": 3.6552658904320803e-26,
+        "rel_rms": 1.0167632564443618e-05
+      },
+      "xray_emissivity": {
+        "max_abs": 5.7220458984375e-06,
+        "rel_rms": 2.4610845875446415e-07
+      },
+      "xray_ionised_fraction": {
+        "max_abs": 3.4421682357788086e-06,
+        "rel_rms": 8.21584373702796e-05
+      },
+      "z_reion": {
+        "max_abs": 0.0,
+        "rel_rms": 0.0
+      }
+    },
+    "brightness_temp_power_3d": {
+      "k_bins": 62,
+      "max_rel": 0.00016017502887951,
+      "median_rel": 8.164160264350405e-06,
+      "p99_9_rel": 0.00015959521522466508
+    }
+  },
+  "cupy_imported": false
+}

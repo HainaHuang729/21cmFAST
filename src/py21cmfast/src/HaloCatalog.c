@@ -20,6 +20,7 @@
 #include "Stochasticity.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "dft.h"
 #include "exceptions.h"
@@ -38,6 +39,7 @@ void free_halo_catalog(HaloCatalog *halos);
 int ComputeHaloCatalog(float redshift_desc, float redshift, InitialConditions *boxes,
                        random_huge random_seed, HaloCatalog *halos_desc, HaloCatalog *halos) {
     int status;
+    P21CudaDexmCtx *dexm_ctx = NULL;
 
     Try {  // This Try brackets the whole function, so we don't indent.
 
@@ -93,6 +95,73 @@ int ComputeHaloCatalog(float redshift_desc, float redshift, InitialConditions *b
         // otherwise we stop at the cell mass
         else
             M_MIN = RtoM(physconst.l_factor * simulation_options_global->BOX_LEN / grid_dim);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            float cuda_delta_r =
+                physconst.l_factor * 2. * simulation_options_global->BOX_LEN / (grid_dim + 0.0);
+            size_huge cuda_total_halos = 0;
+            dexm_ctx =
+                p21_cuda_dexm_run(redshift, boxes, M_MIN, cuda_delta_r, &cuda_total_halos);
+            if (dexm_ctx != NULL) {
+                if (cuda_total_halos > halos->buffer_size) {
+                    p21_cuda_dexm_abort(dexm_ctx);
+                    dexm_ctx = NULL;
+                    LOG_ERROR("Halo buffer overflow (allocated %llu halos)", halos->buffer_size);
+                    double expected_nhalo_val = expected_nhalo(redshift);
+                    double suggested_factor = cuda_total_halos / (expected_nhalo_val + 1) * 1.15;
+                    LOG_ERROR(
+                        "This error was raised because the number of total halos that were found "
+                        "in the box is "
+                        "larger than the number that was allocated for the halo catalog!\n"
+                        "Try raising p21c.config['HALO_CATALOG_MEM_FACTOR'] from %.2f to %.2f.\n"
+                        "If your previous halo catalogs are stored in the cache and you run the "
+                        "code with regenerate=False, "
+                        "then don't worry, the code will read those halos from the cache instead "
+                        "of re-evaluating them, "
+                        "even if you increase `HALO_CATALOG_MEM_FACTOR`.",
+                        config_settings.HALO_CATALOG_MEM_FACTOR, suggested_factor);
+                    Throw(ValueError);
+                }
+
+                HaloCatalog *halos_dexm_cuda;
+                float *halo_overlap_box_cuda = NULL;
+                if (matter_options_global->SOURCE_MODEL == SOURCE_MODEL_CHMF_SAMPLER) {
+                    halos_dexm_cuda = malloc(sizeof(HaloCatalog));
+                    init_halo_coords(halos_dexm_cuda, cuda_total_halos);
+                    halo_overlap_box_cuda = calloc(HII_TOT_NUM_PIXELS, sizeof(float));
+                } else {
+                    halos_dexm_cuda = halos;
+                    halos_dexm_cuda->n_halos = cuda_total_halos;
+                }
+
+                int dexm_stat =
+                    p21_cuda_dexm_finish(dexm_ctx, halos_dexm_cuda, halo_overlap_box_cuda);
+                dexm_ctx = NULL;
+                if (dexm_stat == 0) {
+                    add_properties_cat(random_seed, redshift, halos_dexm_cuda);
+                    LOG_DEBUG("Found %llu DexM halos (CUDA)", halos_dexm_cuda->n_halos);
+                    if (matter_options_global->SOURCE_MODEL == SOURCE_MODEL_CHMF_SAMPLER) {
+                        stochastic_halofield(random_seed, redshift_desc, redshift,
+                                             boxes->lowres_density, halo_overlap_box_cuda,
+                                             halos_dexm_cuda, halos);
+                        free_halo_catalog(halos_dexm_cuda);
+                        free(halos_dexm_cuda);
+                        p21_cuda_invalidate_host_ptr(halo_overlap_box_cuda);
+                        free(halo_overlap_box_cuda);
+                    }
+                    return 0;
+                }
+                if (matter_options_global->SOURCE_MODEL == SOURCE_MODEL_CHMF_SAMPLER) {
+                    free_halo_catalog(halos_dexm_cuda);
+                    free(halos_dexm_cuda);
+                    p21_cuda_invalidate_host_ptr(halo_overlap_box_cuda);
+                    free(halo_overlap_box_cuda);
+                }
+                if (dexm_stat > 0) Throw(dexm_stat);
+            }
+        }
+#endif
 
         // allocate array for the k-space box
         density_field = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * KSPACE_NUM_PIXELS);
@@ -448,7 +517,12 @@ int ComputeHaloCatalog(float redshift_desc, float redshift, InitialConditions *b
                       halos->halo_masses[2], halos->halo_masses[3]);
 
     }  // End of Try()
-    Catch(status) { return (status); }
+    Catch(status) {
+        if (dexm_ctx) {
+            p21_cuda_dexm_abort(dexm_ctx);
+        }
+        return (status);
+    }
     return (0);
 }
 

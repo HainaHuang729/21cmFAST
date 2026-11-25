@@ -167,4 +167,24 @@ double conditional_hmf(double growthf, double lnM, double delta, double sigma, i
 double expected_nhalo(double redshift);
 void compute_mturns(double z, float J_21_LW, float vcb, float Gamma12, float z_reion,
                     float *M_turn_acg, float *M_turn_mcg);
+
+/* CUDA backend runtime and diagnostics */
+int p21_cuda_is_compiled(void);
+int p21_cuda_is_available(void);
+void p21_cuda_set_enabled(int enabled);
+int p21_cuda_get_enabled(void);
+void p21_cuda_set_fast_halo_sampler(int enabled);
+int p21_cuda_get_fast_halo_sampler(void);
+void p21_cuda_reset_stats(void);
+void p21_cuda_get_stats(P21CudaStats *out);
+void p21_cuda_cleanup(void);
+void p21_cuda_invalidate_host_ptr(const void *ptr);
+void p21_cuda_registry_clear(void);
+int p21_cuda_compute_radiation_shells(float redshift, int n_shells, const int *R_ct_arr,
+                                      double R_star, const double *interp_params,
+                                      EmissivityFields **ef_desc_arr,
+                                      EmissivityFields **ef_prog_arr,
+                                      RadiationFieldsSetup *rad_setup,
+                                      PerturbedField *perturbed_field, TsBox *previous_spin_temp,
+                                      RadiationFields *radiation_fields);
 /*-----------------------*/

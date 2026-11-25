@@ -15,6 +15,7 @@
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "dft.h"
 #include "exceptions.h"
@@ -563,6 +564,14 @@ int ComputeInitialConditions(random_huge random_seed, InitialConditions *boxes) 
         writeSimulationOptions(simulation_options_global);
         writeMatterOptions(matter_options_global);
         writeCosmoParams(cosmo_params_global);
+#endif
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_compute_initial_conditions(random_seed, boxes);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
 #endif
 
         int i, j, k;

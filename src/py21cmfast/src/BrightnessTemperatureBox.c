@@ -14,6 +14,7 @@
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "dft.h"
 #include "exceptions.h"
 #include "indexing.h"
@@ -37,6 +38,15 @@ int ComputeBrightnessTemp(float redshift, TsBox *spin_temp, IonizedBox *ionized_
         ave = 0.;
 
         omp_set_num_threads(simulation_options_global->N_THREADS);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_compute_brightness_temp(redshift, spin_temp, ionized_box,
+                                                             perturb_field, box);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
         float const_factor, T_rad, pixel_x_HI, pixel_deltax, H;
 

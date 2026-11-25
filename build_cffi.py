@@ -1,6 +1,9 @@
 """Build the C code with CFFI."""
 
 import os
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -131,10 +134,252 @@ elif sys.platform.startswith("linux"):
 
 library_dirs = []
 for k, v in os.environ.items():
+    if not v:
+        continue
     if "inc" in k.lower():
-        include_dirs += [v]
+        include_dirs += [p for p in v.split(os.pathsep) if p]
     elif "lib" in k.lower():
-        library_dirs += [v]
+        library_dirs += [p for p in v.split(os.pathsep) if p]
+
+
+def _resolve_cuda_toolchain() -> tuple[Path, Path, Path]:
+    """Locate ``nvcc`` and the corresponding CUDA include and library directories.
+
+    Returns
+    -------
+    nvcc : Path
+        Path to the ``nvcc`` executable.
+    cuda_inc : Path
+        Path to the CUDA header directory.
+    cuda_lib : Path
+        Path to the CUDA library directory.
+    """
+    nvcc_env = os.environ.get("NVCC")
+    cuda_home_env = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if nvcc_env:
+        nvcc = Path(nvcc_env)
+    elif cuda_home_env:
+        nvcc = Path(cuda_home_env) / "bin" / "nvcc"
+    else:
+        which_nvcc = shutil.which("nvcc")
+        nvcc = Path(which_nvcc) if which_nvcc else Path("/usr/local/cuda/bin/nvcc")
+
+    if not nvcc.exists():
+        raise FileNotFoundError(
+            f"USE_CUDA=1 requested, but nvcc was not found at '{nvcc}'. "
+            "Set NVCC or CUDA_HOME to a valid CUDA toolkit."
+        )
+
+    cuda_root = (
+        Path(cuda_home_env).resolve() if cuda_home_env else nvcc.resolve().parent.parent
+    )
+    cuda_inc = cuda_root / "include"
+    cuda_lib = cuda_root / "lib64"
+    if not cuda_lib.exists():
+        cuda_lib = cuda_root / "lib"
+    return nvcc, cuda_inc, cuda_lib
+
+
+def _detect_nvcc_version(nvcc: Path) -> tuple[int, int] | None:
+    """Detect the major and minor CUDA toolkit version from ``nvcc --version``."""
+    result = subprocess.run(
+        [str(nvcc), "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    banner = f"{result.stdout}\n{result.stderr}"
+    match = re.search(r"release\s+(\d+)\.(\d+)", banner)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _parse_cuda_archs(nvcc_version: tuple[int, int] | None = None) -> list[str]:
+    """Parse ``CUDA_ARCHS`` into numeric SM architecture strings."""
+    raw = os.environ.get("CUDA_ARCHS", "").strip()
+    if raw:
+        tokens = raw.replace(",", " ").replace(";", " ").split()
+        archs: list[str] = []
+        for tok in tokens:
+            cleaned = tok.removeprefix("sm_").removeprefix("compute_")
+            if cleaned and cleaned not in archs:
+                archs.append(cleaned)
+        if archs:
+            return archs
+
+    if nvcc_version is None:
+        return ["75", "80", "86", "89"]
+    if nvcc_version >= (13, 0):
+        return ["75", "80", "86", "89", "90"]
+    if nvcc_version >= (12, 0):
+        return ["70", "75", "80", "86", "89", "90"]
+    if nvcc_version >= (11, 8):
+        return ["70", "75", "80", "86", "89"]
+    return ["70", "75", "80", "86"]
+
+
+def _compile_cuda_objects(
+    cloc: Path,
+    obj_dir: Path,
+    log_level: int,
+    include_dirs: list[str],
+    library_dirs: list[str],
+    libraries: list[str],
+    extra_compile_args: list[str],
+) -> tuple[list[str], list[str]]:
+    """Compile native CUDA sources and perform device linking when ``USE_CUDA=1``.
+
+    Parameters
+    ----------
+    cloc : Path
+        Root directory of C/CUDA sources.
+    obj_dir : Path
+        Directory where compiled ``.o`` artifacts are cached.
+    log_level : int
+        Preprocessor ``LOG_LEVEL`` integer passed to ``nvcc``.
+    include_dirs : list[str]
+        Include directory list updated with CUDA headers.
+    library_dirs : list[str]
+        Library directory list updated with CUDA libraries.
+    libraries : list[str]
+        Linked library list updated with CUDA runtime libraries.
+    extra_compile_args : list[str]
+        Host C compiler flags updated with ``-DUSE_CUDA=1``.
+
+    Returns
+    -------
+    extra_objects : list[str]
+        Compiled CUDA object files including the ``nvcc -dlink`` object.
+    extra_link_args : list[str]
+        Linker flags such as ``-Wl,-rpath`` for the CUDA library directory.
+    """
+    if sys.platform == "darwin":
+        raise RuntimeError(
+            "USE_CUDA=1 is not supported on macOS; build with USE_CUDA=0."
+        )
+
+    nvcc, cuda_inc, cuda_lib = _resolve_cuda_toolchain()
+    nvcc_version = _detect_nvcc_version(nvcc)
+    archs = _parse_cuda_archs(nvcc_version)
+    arch_flags: list[str] = []
+    for arch in archs:
+        arch_flags.extend(["-gencode", f"arch=compute_{arch},code=sm_{arch}"])
+    arch_flags.extend(
+        ["-gencode", f"arch=compute_{archs[-1]},code=compute_{archs[-1]}"]
+    )
+
+    if str(cuda_inc) not in include_dirs:
+        include_dirs.append(str(cuda_inc))
+    if str(cuda_lib) not in library_dirs:
+        library_dirs.append(str(cuda_lib))
+
+    extra_compile_args.append("-DUSE_CUDA=1")
+    for lib_name in ("cudart", "cufft", "stdc++"):
+        if lib_name not in libraries:
+            libraries.append(lib_name)
+
+    cu_dir = cloc / "cuda"
+    cu_files = sorted(cu_dir.glob("*.cu"))
+    if not cu_files:
+        raise FileNotFoundError(
+            f"USE_CUDA=1 requested, but no .cu sources found in '{cu_dir}'."
+        )
+
+    debug_flags = ["-g", "-G", "-O0"] if "DEBUG" in os.environ else ["-O3"]
+    cuda_host_cxx = os.environ.get("CUDAHOSTCXX", "").strip()
+    ccbin_flags = ["-ccbin", cuda_host_cxx] if cuda_host_cxx else []
+    nvcc_includes = list(dict.fromkeys([str(cloc), str(cu_dir), *include_dirs]))
+    nvcc_flags = [
+        *ccbin_flags,
+        "-Xcompiler",
+        "-fPIC",
+        "-std=c++17",
+        "-rdc=true",
+        "--fmad=false",
+        f"-DLOG_LEVEL={log_level:d}",
+        "-DUSE_CUDA=1",
+        *debug_flags,
+        *arch_flags,
+        *(f"-I{inc}" for inc in nvcc_includes),
+    ]
+
+    obj_dir.mkdir(parents=True, exist_ok=True)
+    stamp_file = obj_dir / ".flags.stamp"
+    stamp_text = "\n".join([str(nvcc), cuda_host_cxx, *nvcc_flags])
+    flags_changed = not stamp_file.exists() or stamp_file.read_text() != stamp_text
+
+    header_files = [
+        *cu_dir.glob("*.cuh"),
+        *cu_dir.glob("*.h"),
+        *cloc.glob("*.h"),
+    ]
+    max_header_mtime = max((h.stat().st_mtime for h in header_files), default=0.0)
+
+    obj_paths: list[str] = []
+    rebuilt_any = flags_changed
+    for cu_file in cu_files:
+        obj_file = obj_dir / f"{cu_file.stem}.o"
+        obj_paths.append(str(obj_file))
+        src_mtime = max(cu_file.stat().st_mtime, max_header_mtime)
+        needs_build = (
+            flags_changed
+            or not obj_file.exists()
+            or obj_file.stat().st_mtime < src_mtime
+        )
+        if needs_build:
+            cmd = [
+                str(nvcc),
+                "-c",
+                *nvcc_flags,
+                str(cu_file),
+                "-o",
+                str(obj_file),
+            ]
+            print(" ".join(cmd))
+            subprocess.run(cmd, check=True)
+            rebuilt_any = True
+
+    dlink_obj = obj_dir / "cuda_dlink.o"
+    if rebuilt_any or not dlink_obj.exists():
+        dlink_cmd = [
+            str(nvcc),
+            "-dlink",
+            *ccbin_flags,
+            "-Xcompiler",
+            "-fPIC",
+            *arch_flags,
+            *obj_paths,
+            "-o",
+            str(dlink_obj),
+        ]
+        print(" ".join(dlink_cmd))
+        subprocess.run(dlink_cmd, check=True)
+        stamp_file.write_text(stamp_text)
+
+    extra_objects = [*obj_paths, str(dlink_obj)]
+    extra_link_args = [f"-Wl,-rpath,{cuda_lib}"]
+    return extra_objects, extra_link_args
+
+
+use_cuda = os.environ.get("USE_CUDA", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+extra_objects: list[str] = []
+extra_link_args: list[str] = []
+if use_cuda:
+    extra_objects, extra_link_args = _compile_cuda_objects(
+        cloc=CLOC,
+        obj_dir=LOCATION / "build" / "cuda_objs",
+        log_level=log_level,
+        include_dirs=include_dirs,
+        library_dirs=library_dirs,
+        libraries=libraries,
+        extra_compile_args=extra_compile_args,
+    )
 
 # =================================================================
 # NOTES FOR DEVELOPERS:
@@ -158,6 +403,8 @@ ffi.set_source(
     library_dirs=library_dirs,
     libraries=libraries,
     extra_compile_args=extra_compile_args,
+    extra_objects=extra_objects,
+    extra_link_args=extra_link_args,
 )
 
 # Header files containing types, globals and function prototypes

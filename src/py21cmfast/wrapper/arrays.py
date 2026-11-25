@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 from attrs.validators import instance_of, optional
 
+from ..c_21cmfast import ffi, lib
 from .arraystate import ArrayState
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 def _tuple_of_ints(x: Sequence[float | int]) -> tuple[int]:
     return tuple(int(i) for i in x)
+
+
+def _invalidate_cuda_ptr(arr: np.ndarray | None) -> None:
+    """Invalidate any cached GPU copy associated with a contiguous host array."""
+    if arr is not None and arr.flags.c_contiguous and arr.size > 0:
+        lib.p21_cuda_invalidate_host_ptr(ffi.cast("const void *", arr.ctypes.data))
 
 
 class CacheBackend(ABC):
@@ -173,23 +180,29 @@ class Array:
         if self.state.initialized:
             return self
         else:
+            value = self.initfunc(self.shape, dtype=self.dtype)
+            _invalidate_cuda_ptr(value)
             return attrs.evolve(
                 self,
-                value=self.initfunc(self.shape, dtype=self.dtype),
+                value=value,
                 state=self.state.initialize(),
             )
 
     def with_value(self, val: np.ndarray) -> Self:
         """Set the array to a given value and return a new Array."""
-        return attrs.evolve(
-            self, value=val.astype(self.dtype, copy=False), state=self.state.computed()
-        )
+        _invalidate_cuda_ptr(self._value)
+        new_val = val.astype(self.dtype, copy=False)
+        _invalidate_cuda_ptr(new_val)
+        return attrs.evolve(self, value=new_val, state=self.state.computed())
 
     def _with_value_not_computed(self, val: np.ndarray) -> Self:
         """Set the array to a given value and return a new Array, but without indicating the array has been computed."""
+        _invalidate_cuda_ptr(self._value)
+        new_val = val.astype(self.dtype, copy=False)
+        _invalidate_cuda_ptr(new_val)
         return attrs.evolve(
             self,
-            value=val.astype(self.dtype, copy=False),
+            value=new_val,
         )
 
     def computed(self) -> Self:
@@ -198,6 +211,7 @@ class Array:
 
     def without_value(self) -> Self:
         """Remove the allocated data from the array."""
+        _invalidate_cuda_ptr(self._value)
         return attrs.evolve(self, value=None, state=self.state.dropped())
 
     def written_to_disk(self, backend: CacheBackend | None) -> Self:
@@ -231,6 +245,7 @@ class Array:
             backend,
         )
         value = backend.read().astype(self.dtype, copy=False)
+        _invalidate_cuda_ptr(value)
         return attrs.evolve(
             self,
             value=value,
@@ -459,12 +474,12 @@ class ArrayProxy:
         self.private = f"_{name}"
 
     @overload
-    def __get__(self, obj: None, owner: type | None = ...) -> ArrayProxy: ...
+    def __get__(self, obj: None, owner: type | None = ...) -> ArrayProxy:
+        ...
 
     @overload
-    def __get__(
-        self, obj: OutputStruct, owner: type | None = ...
-    ) -> np.ndarray | None: ...
+    def __get__(self, obj: OutputStruct, owner: type | None = ...) -> np.ndarray | None:
+        ...
 
     def __get__(self, obj, owner=None):
         """Return the array's data, loading it from disk if it has been purged."""

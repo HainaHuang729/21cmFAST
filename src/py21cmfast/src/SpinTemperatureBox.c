@@ -8,6 +8,7 @@
 
 #include "Constants.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "exceptions.h"
 #include "heating_helper_progs.h"
 #include "indexing.h"
@@ -335,9 +336,32 @@ int ComputeTsBox(float redshift, float prev_redshift, PerturbedField *perturbed_
 
         if (redshift >= simulation_options_global->Z_HEAT_MAX) {
             LOG_DEBUG("redshift greater than Z_HEAT_MAX");
+#ifdef USE_CUDA
+            if (p21_cuda_get_enabled()) {
+                double xe_rf = xion_RECFAST(redshift, 0);
+                double tk_rf = T_RECFAST(redshift, 0);
+                double cT_ad = astro_options_global->USE_ADIABATIC_FLUCTUATIONS
+                                   ? cT_approx(redshift)
+                                   : 0.0;
+                int cuda_stat = p21_cuda_init_first_ts(this_spin_temp, perturbed_field->density,
+                                                       redshift, xe_rf, tk_rf, cT_ad);
+                if (cuda_stat == 0) return 0;
+                if (cuda_stat > 0) Throw(cuda_stat);
+            }
+#endif
             init_first_Ts(this_spin_temp, perturbed_field->density, redshift);
             return (0);
         }
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_compute_ts_box(redshift, prev_redshift, perturbed_field,
+                                                    radiation_fields, previous_spin_temp,
+                                                    ini_boxes, this_spin_temp);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
         this_spin_temp->Q_HI = radiation_fields->Q_HI;
 

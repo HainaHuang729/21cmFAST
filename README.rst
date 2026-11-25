@@ -67,3 +67,22 @@ New Features in 4.0.0
 As of ``v3.0.0``, ``21cmFAST`` is conveniently wrapped in Python to enable more dynamic code.
 See the `Changelog <https://21cmfast.readthedocs.io/en/latest/changelog.html>`_ for a
 full list of changes.
+
+Native CUDA GPU Backend
+=======================
+
+``21cmFAST`` optionally supports a native C/CUDA + cuFFT backend (no CuPy or NVRTC
+dependency; CPU-only builds remain the default).
+
+* **Building with CUDA** (Linux + NVIDIA CUDA Toolkit >= 11.2): set ``USE_CUDA=1`` when
+  compiling the C extension (e.g. ``USE_CUDA=1 pip install -e .``). You may optionally
+  set ``CUDA_ARCHS`` (e.g. ``"80 86 89"``), ``CUDA_HOME``/``NVCC``, or ``CUDAHOSTCXX``.
+  When ``USE_CUDA`` is unset or ``0``, no CUDA headers or libraries are linked.
+* **Enabling at runtime**: set ``py21cmfast.config["USE_CUDA"] = True`` (or env var
+  ``P21_USE_CUDA=1``). If no CUDA GPU is available at runtime, ``21cmFAST``
+  automatically falls back to the CPU OpenMP path.
+* **Fast GPU Halo Sampler (optional)**: when ``SOURCE_MODEL="CHMF-SAMPLER"``, setting
+  ``py21cmfast.config["CUDA_FAST_HALO_SAMPLER"] = True`` (or
+  ``P21_CUDA_FAST_HALO_SAMPLER=1``) enables parallel GPU Philox halo sampling
+  (statistically consistent with the default CPU GSL sampler).
+

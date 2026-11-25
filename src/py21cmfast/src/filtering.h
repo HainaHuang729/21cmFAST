@@ -11,5 +11,7 @@ int test_filter(float *input_box, double R, double R_param, double R_star, int f
                 double *result);
 double filter_function(double k, int filter_type);
 double dwdm_filter(double k, double R, int filter_type);
+void p21_get_ms_filter_params(double R_inner, double R_outer, double R_star,
+                              double out_alpha_beta[4]);
 
 #endif

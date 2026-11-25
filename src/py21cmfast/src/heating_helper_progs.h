@@ -42,6 +42,8 @@ float zmax(float z, int n);
 
 // Lyman-Alpha heating functions
 double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag);
+int p21_get_lya_heating_tables(const double **dEC_out, const double **dEI_out, int *nT_out,
+                               int *ngp_out, int *generation_out);
 
 // rootfind to get the distance at which X-ray optical depth tau==1
 double nu_tau_one_mcg(double zp, double zpp, double x_e, double log10_Mturn_acg,

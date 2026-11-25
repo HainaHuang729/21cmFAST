@@ -54,6 +54,9 @@
 
 static double BinWidth_pH, inv_BinWidth_pH, BinWidth_elec, inv_BinWidth_elec, BinWidth_10,
     inv_BinWidth_10;
+static double lya_dEC[nT * nT * ngp];
+static double lya_dEI[nT * nT * ngp];
+static int lya_heating_gen = 0;
 
 int init_heat() {
     kappa_10(1.0, 1);
@@ -1349,8 +1352,6 @@ double interpolate_heating_efficiencies(double tk, double ts, double taugp, doub
 // Function to read \deltaE
 double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
     double ans;
-    static double dEC[nT * nT * ngp];
-    static double dEI[nT * nT * ngp];
     int ii, jj, kk, index;
     FILE *F;
 
@@ -1369,22 +1370,36 @@ double Energy_Lya_heating(double Tk, double Ts, double tau_gp, int flag) {
             for (jj = 0; jj < nT; jj++) {
                 for (kk = 0; kk < ngp; kk++) {
                     index = ii * nT * ngp + jj * ngp + kk;
-                    fscanf(F, "%lf %lf", &dEC[index], &dEI[index]);
+                    fscanf(F, "%lf %lf", &lya_dEC[index], &lya_dEI[index]);
                 }
             }
         }
 
         fclose(F);
+        lya_heating_gen++;
         return 0;
     }
 
     if (flag == 2) {
-        ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEC);  // For Continuum Flux
+        ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, lya_dEC);  // For Continuum Flux
     } else if (flag == 3) {
-        ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, dEI);  // For Injected Flux
+        ans = interpolate_heating_efficiencies(Tk, Ts, tau_gp, lya_dEI);  // For Injected Flux
     } else {
         LOG_ERROR("invalid flag passed to Energy_Lya_heating");
         Throw(ValueError);
     }
     return ans;
+}
+
+int p21_get_lya_heating_tables(const double **dEC_out, const double **dEI_out, int *nT_out,
+                               int *ngp_out, int *generation_out) {
+    if (lya_heating_gen <= 0) {
+        return 0;
+    }
+    if (dEC_out) *dEC_out = lya_dEC;
+    if (dEI_out) *dEI_out = lya_dEI;
+    if (nT_out) *nT_out = nT;
+    if (ngp_out) *ngp_out = ngp;
+    if (generation_out) *generation_out = lya_heating_gen;
+    return 1;
 }

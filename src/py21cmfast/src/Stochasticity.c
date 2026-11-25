@@ -15,6 +15,7 @@
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "exceptions.h"
 #include "hmf.h"
 #include "indexing.h"
@@ -1130,6 +1131,84 @@ int stochastic_halofield(random_huge seed, float redshift_desc, float redshift, 
 
     struct HaloSamplingConstants hs_constants;
     stoc_set_consts_z(&hs_constants, redshift, redshift_desc);
+
+#ifdef USE_CUDA
+    if (p21_cuda_get_enabled() && p21_cuda_get_fast_halo_sampler() &&
+        uses_hmf_interpolation(matter_options_global->USE_INTERPOLATION_TABLES)) {
+        P21HaloSamplingParams hsp = {
+            .from_catalog = hs_constants.from_catalog,
+            .z_in = hs_constants.z_in,
+            .z_out = hs_constants.z_out,
+            .growth_in = hs_constants.growth_in,
+            .growth_out = hs_constants.growth_out,
+            .M_min = hs_constants.M_min,
+            .lnM_min = hs_constants.lnM_min,
+            .sigma_min = hs_constants.sigma_min,
+            .M_max_tables = hs_constants.M_max_tables,
+            .lnM_max_tb = hs_constants.lnM_max_tb,
+            .M_cond = hs_constants.M_cond,
+            .lnM_cond = hs_constants.lnM_cond,
+            .sigma_cond = hs_constants.sigma_cond,
+            .corr_star = hs_constants.corr_star,
+            .corr_sfr = hs_constants.corr_sfr,
+            .corr_xray = hs_constants.corr_xray,
+        };
+        int n_threads = simulation_options_global->N_THREADS;
+        int overflow_out = 0;
+        size_huge thread_counts[n_threads];
+        int cuda_stat = -1;
+        if (redshift_desc <= 0.) {
+            cuda_stat = p21_cuda_sample_halo_grids(seed + seed_fac, redshift, dens_field,
+                                                   halo_overlap_box, halos_desc, halos, &hsp,
+                                                   &overflow_out, thread_counts);
+        } else {
+            cuda_stat = p21_cuda_sample_halo_progenitors(seed + seed_fac, redshift_desc, redshift,
+                                                         halos_desc, halos, &hsp, &overflow_out,
+                                                         thread_counts);
+        }
+        if (cuda_stat == 0) {
+            if (overflow_out) {
+                size_huge arraysize_local = halos->buffer_size / n_threads;
+                size_huge max_halos_per_thread = thread_counts[0];
+                LOG_ERROR("Halo buffer overflow (allocated %llu halos per thread)",
+                          arraysize_local);
+                for (int n_t = 0; n_t < n_threads; n_t++) {
+                    LOG_ERROR("Thread %d: %llu halos", n_t, thread_counts[n_t]);
+                    if (thread_counts[n_t] > max_halos_per_thread) {
+                        max_halos_per_thread = thread_counts[n_t];
+                    }
+                }
+                double expected_nhalo_val = expected_nhalo(redshift);
+                double expected_buffer_per_thread = (expected_nhalo_val + 1) / n_threads;
+                double suggested_factor = max_halos_per_thread / expected_buffer_per_thread * 1.15;
+                LOG_ERROR(
+                    "This error was raised because the number of total halos that were found in "
+                    "the box is "
+                    "larger than the number that was allocated for the halo catalog!\n"
+                    "Try raising p21c.config['HALO_CATALOG_MEM_FACTOR'] from %.2f to %.2f.\n"
+                    "If your previous halo catalogs are stored in the cache and you run the code "
+                    "with regenerate=False, "
+                    "then don't worry, the code will read those halos from the cache instead of "
+                    "re-evaluating them, "
+                    "even if you increase `HALO_CATALOG_MEM_FACTOR`.",
+                    config_settings.HALO_CATALOG_MEM_FACTOR, suggested_factor);
+                free_dndm_tables();
+                free_rng_threads(rng_stoc);
+                Throw(ValueError);
+            }
+            LOG_DEBUG("Found %llu Halos (CUDA fast sampler)", halos->n_halos);
+            free_dndm_tables();
+            free_rng_threads(rng_stoc);
+            LOG_DEBUG("Done.");
+            return 0;
+        }
+        if (cuda_stat > 0) {
+            free_dndm_tables();
+            free_rng_threads(rng_stoc);
+            Throw(cuda_stat);
+        }
+    }
+#endif
 
     // Fill them
     // NOTE:Halos prev in the first box corresponds to the large DexM halos

@@ -18,6 +18,7 @@
 #include "InputParameters.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "exceptions.h"
 #include "hmf.h"
 #include "interpolation.h"
@@ -723,6 +724,19 @@ void initialize_dndm_tables(double xmin, double xmax, double ymin, double ymax, 
     Fcoll_table.x_min = xmin;
     Fcoll_table.x_width = (xmax - xmin) / ((double)nx - 1);
 
+#ifdef USE_CUDA
+    if (p21_cuda_get_enabled() &&
+        uses_interpolation_tables(matter_options_global->USE_INTERPOLATION_TABLES) &&
+        Sigma_InterpTable.allocated && dSigmasqdm_InterpTable.allocated) {
+        if (p21_cuda_fill_dndm_tables(nx, xmin, xmax, ymin, ymax, growth_out, param,
+                                      from_catalog ? 1 : 0, Nhalo_table.y_arr,
+                                      Fcoll_table.y_arr) == 0) {
+            LOG_SUPER_DEBUG("Done (CUDA).");
+            return;
+        }
+    }
+#endif
+
 #pragma omp parallel num_threads(simulation_options_global->N_THREADS) private(i) \
     firstprivate(sigma_cond, lnM_cond)
     {
@@ -813,6 +827,19 @@ void initialize_dndm_inverse_table(double xmin, double xmax, double lnM_min, dou
     Nhalo_inv_table.x_width = xa[1] - xa[0];
     Nhalo_inv_table.y_min = pa[0];
     Nhalo_inv_table.y_width = pa[1] - pa[0];
+
+#ifdef USE_CUDA
+    if (p21_cuda_get_enabled() &&
+        uses_interpolation_tables(matter_options_global->USE_INTERPOLATION_TABLES) &&
+        Sigma_InterpTable.allocated && dSigmasqdm_InterpTable.allocated) {
+        if (p21_cuda_fill_dndm_inverse_table(nx, np, xmin, xmax, lnM_min, growth_out, param,
+                                             from_catalog ? 1 : 0, min_lp,
+                                             Nhalo_inv_table.z_arr) == 0) {
+            LOG_SUPER_DEBUG("Done (CUDA).");
+            return;
+        }
+    }
+#endif
 
 #pragma omp parallel num_threads(simulation_options_global->N_THREADS) private(i, k) \
     firstprivate(sigma_cond, lnM_cond)
@@ -1357,4 +1384,33 @@ double evaluate_dsigma_square_dm(double lnM) {
         return -pow(10., EvaluateRGTable1D_f(lnM, &dSigmasqdm_InterpTable));
     }
     return dsigmasqdm_z0(exp(lnM));
+}
+
+void p21_get_conditional_tables(P21ConditionalTables *out) {
+    if (!out) return;
+    out->sfrd_1d_acg = SFRD_conditional_table1D_acg.allocated ? &SFRD_conditional_table1D_acg : NULL;
+    out->sfrd_2d_acg = SFRD_conditional_table2D_acg.allocated ? &SFRD_conditional_table2D_acg : NULL;
+    out->sfrd_2d_mcg = SFRD_conditional_table2D_mcg.allocated ? &SFRD_conditional_table2D_mcg : NULL;
+    out->xray_1d_acg = Xray_conditional_table1D_acg.allocated ? &Xray_conditional_table1D_acg : NULL;
+    out->xray_2d_acg = Xray_conditional_table2D_acg.allocated ? &Xray_conditional_table2D_acg : NULL;
+    out->xray_2d_mcg = Xray_conditional_table2D_mcg.allocated ? &Xray_conditional_table2D_mcg : NULL;
+    out->nion_1d_acg = Nion_conditional_table1D_acg.allocated ? &Nion_conditional_table1D_acg : NULL;
+    out->nion_2d_acg = Nion_conditional_table2D_acg.allocated ? &Nion_conditional_table2D_acg : NULL;
+    out->nion_2d_mcg = Nion_conditional_table2D_mcg.allocated ? &Nion_conditional_table2D_mcg : NULL;
+    out->nion_2d_acg_prev =
+        Nion_conditional_table2D_acg_prev.allocated ? &Nion_conditional_table2D_acg_prev : NULL;
+    out->nion_2d_mcg_prev =
+        Nion_conditional_table2D_mcg_prev.allocated ? &Nion_conditional_table2D_mcg_prev : NULL;
+    out->nhalo_1d = Nhalo_table.allocated ? &Nhalo_table : NULL;
+    out->fcoll_1d = Fcoll_table.allocated ? &Fcoll_table : NULL;
+}
+
+void p21_get_sampler_tables(P21SamplerTables *out) {
+    if (!out) return;
+    out->sigma_1d = Sigma_InterpTable.allocated ? &Sigma_InterpTable : NULL;
+    out->dsigmasqdm_1d = dSigmasqdm_InterpTable.allocated ? &dSigmasqdm_InterpTable : NULL;
+    out->nhalo_1d = Nhalo_table.allocated ? &Nhalo_table : NULL;
+    out->fcoll_1d = Fcoll_table.allocated ? &Fcoll_table : NULL;
+    out->nhalo_inv_2d = Nhalo_inv_table.allocated ? &Nhalo_inv_table : NULL;
+    out->j_split_1d = J_split_table.allocated ? &J_split_table : NULL;
 }

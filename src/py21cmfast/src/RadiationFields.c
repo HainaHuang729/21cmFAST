@@ -10,6 +10,7 @@ This includes X-ray heating rate, photoionization rate, and Lyman-alpha flux.
 #include "Constants.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "dft.h"
 #include "exceptions.h"
@@ -310,6 +311,16 @@ int UpdateRadiationFields(float redshift, EmissivityFields *emissivity_fields, i
         // This is important because we must do some final steps after the last shell is
         // done, see comment below
         if (R_ct == astro_params_global->N_STEP_TS - 1) LOG_DEBUG("starting RadiationFields");
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_update_radiation_fields(
+                redshift, emissivity_fields, R_ct, R_star, perturbed_field, previous_spin_temp,
+                rad_setup, radiation_fields);
+            if (cuda_stat == 0) return 0;
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
         double sfrd_avg_acg, filtered_sfrd_avg_acg, sfrd_avg_mcg = 0., filtered_sfrd_avg_mcg = 0.;
         double xray_emissivity_avg, filtered_xray_emissivity_avg;

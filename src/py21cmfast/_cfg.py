@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import warnings
 from pathlib import Path
 from typing import ClassVar
@@ -32,6 +33,12 @@ class Config(dict):
         "EXTRA_EMISSIVITY_FIELDS": False,
         "safe_read": True,
         "CACHE_ARRAYS_ON_ACCESS": True,
+        "USE_CUDA": os.environ.get("P21_USE_CUDA", "0").strip().lower()
+        in ("1", "true", "yes", "on"),
+        "CUDA_FAST_HALO_SAMPLER": os.environ.get("P21_CUDA_FAST_HALO_SAMPLER", "0")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on"),
     }
     _defaults["wisdoms_path"] = Path(_defaults["direc"]) / "wisdoms"
 
@@ -72,6 +79,8 @@ class Config(dict):
         # NOTE: This seems messy but I don't know a better way to do it
         for k in self._c_config_settings:
             self._pass_to_backend(k, self[k])
+        lib.p21_cuda_set_enabled(int(bool(self["USE_CUDA"])))
+        lib.p21_cuda_set_fast_halo_sampler(int(bool(self["CUDA_FAST_HALO_SAMPLER"])))
 
     def __setitem__(self, key, value):
         """Set an item in the config. Also updating the backend if it exists there."""
@@ -79,6 +88,10 @@ class Config(dict):
         super().__setitem__(key, value)
         if key in self._c_config_settings:
             self._pass_to_backend(key, value)
+        elif key == "USE_CUDA":
+            lib.p21_cuda_set_enabled(int(bool(value)))
+        elif key == "CUDA_FAST_HALO_SAMPLER":
+            lib.p21_cuda_set_fast_halo_sampler(int(bool(value)))
 
     def _pass_to_backend(self, key, value):
         """Set the value in the backend."""

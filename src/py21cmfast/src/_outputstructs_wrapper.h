@@ -140,3 +140,38 @@ typedef struct BrightnessTemp {
     float *brightness_temp;
     float *tau_21;
 } BrightnessTemp;
+
+typedef struct P21CudaStats {
+    int compiled;
+    int enabled;
+    int device_id;
+    int sm_count;
+    unsigned long long int free_mem_bytes;
+    unsigned long long int total_mem_bytes;
+    unsigned long long int mempool_alloc_calls;
+    unsigned long long int mempool_free_calls;
+    unsigned long long int mempool_bytes_allocated;
+    unsigned long long int cufft_plan_hits;
+    unsigned long long int cufft_plan_misses;
+    unsigned long long int cufft_plan_evictions;
+    unsigned long long int cufft_exec_r2c;
+    unsigned long long int cufft_exec_c2r;
+    unsigned long long int cufft_exec_c2c;
+    unsigned long long int registry_hits;
+    unsigned long long int registry_misses;
+    unsigned long long int registry_invalidations;
+    unsigned long long int registry_h2d_bytes;
+    unsigned long long int registry_d2h_bytes;
+    unsigned long long int ic_runs;
+    unsigned long long int perturb_runs;
+    unsigned long long int emissivity_runs;
+    unsigned long long int radiation_setup_runs;
+    unsigned long long int radiation_update_runs;
+    unsigned long long int spin_temp_runs;
+    unsigned long long int ionization_runs;
+    unsigned long long int brightness_runs;
+    unsigned long long int halo_dexm_runs;
+    unsigned long long int halo_sampler_runs;
+    unsigned long long int halo_perturb_runs;
+    unsigned long long int dndm_table_runs;
+} P21CudaStats;

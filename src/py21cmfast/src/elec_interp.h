@@ -26,4 +26,9 @@ int locate_xHII_index(float xHII_call);
 // TODO: remove it and make it static in elec_interp.c
 extern float x_int_XHII[x_int_NXHII];
 
+int p21_get_elec_interp_tables(const float **xhii_out, const float **energy_out,
+                               const float **fheat_out, const float **nlya_out,
+                               const float **nion_hi_out, const float **nion_hei_out,
+                               const float **nion_heii_out);
+
 #endif

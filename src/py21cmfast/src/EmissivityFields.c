@@ -9,12 +9,14 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "Constants.h"
 #include "InputParameters.h"
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "exceptions.h"
 #include "hmf.h"
@@ -717,6 +719,8 @@ int ComputeEmissivityFields(double redshift, InitialConditions *ini_boxes,
                             TsBox *previous_spin_temp, IonizedBox *previous_ionize_box,
                             EmissivityFields *emissivity_fields) {
     int status;
+    P21CudaEmissivityCtx *cuda_ctx = NULL;
+    P21CudaLagEmissCtx *lag_cuda_ctx = NULL;
     Try {
         // get parameters
 
@@ -726,6 +730,223 @@ int ComputeEmissivityFields(double redshift, InitialConditions *ini_boxes,
         writeMatterOptions(matter_options_global);
         writeAstroParams(astro_params_global);
         writeAstroOptions(astro_options_global);
+#endif
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled() &&
+            source_model_uses_eulerian_grids(matter_options_global->SOURCE_MODEL) &&
+            simulation_options_global->HII_DIM > 1 &&
+            uses_hmf_interpolation(matter_options_global->USE_INTERPOLATION_TABLES)) {
+            ScalingConstants consts;
+            set_scaling_constants(redshift, &consts, true);
+
+            double log10_mturn_averages[2] = {0.0, 0.0};
+            double min_density = 0.0, max_density = 0.0;
+            cuda_ctx = p21_cuda_emissivity_begin(redshift, ini_boxes, perturbed_field,
+                                                 previous_spin_temp, previous_ionize_box, &consts,
+                                                 log10_mturn_averages, &min_density, &max_density);
+            if (cuda_ctx != NULL) {
+                emissivity_fields->log10_mturn_acg_ave = log10_mturn_averages[0];
+                emissivity_fields->log10_mturn_mcg_ave = log10_mturn_averages[1];
+
+                double M_min = minimum_source_mass(redshift, false);
+                double M_max_integral = M_MAX_INTEGRAL;
+                if (M_min < M_max_integral) {
+                    double lnM_min = log(M_min);
+                    double lnM_max = log(M_max_integral);
+                    double M_cell = consts.M_cell;
+                    ScalingConstants _ev_consts = consts;
+                    if (astro_options_global->HALO_SCALING_RELATIONS_MEDIAN) {
+                        _ev_consts = mimic_scatter_in_consts(&consts);
+                    }
+
+                    if (astro_options_global->INTEGRATION_METHOD_ACGS ==
+                            INTEGRATION_METHOD_GAUSS_LEGENDRE ||
+                        (astro_options_global->USE_MCGS &&
+                         astro_options_global->INTEGRATION_METHOD_MCGS ==
+                             INTEGRATION_METHOD_GAUSS_LEGENDRE)) {
+                        initialise_GL(lnM_min, lnM_max);
+                    }
+                    if (astro_options_global->USE_TS_FLUCT ||
+                        (config_settings.EXTRA_EMISSIVITY_FIELDS &&
+                         source_model_is_mass_dependent(matter_options_global->SOURCE_MODEL))) {
+                        initialize_sfrd_conditional_tables(_ev_consts.redshift, min_density,
+                                                           max_density, M_min, M_max_integral,
+                                                           M_cell, &_ev_consts);
+                    }
+                    if (astro_options_global->USE_TS_FLUCT &&
+                        astro_options_global->USE_METALLICITY) {
+                        initialize_xray_emissivity_conditional_tables(
+                            _ev_consts.redshift, min_density, max_density, M_min, M_max_integral,
+                            M_cell, &_ev_consts);
+                    }
+                    initialize_nion_conditional_tables(_ev_consts.redshift, min_density, max_density,
+                                                       M_min, M_max_integral, M_cell, &_ev_consts,
+                                                       false);
+                    if (config_settings.EXTRA_EMISSIVITY_FIELDS) {
+                        initialize_dndm_tables(min_density, max_density, lnM_min, lnM_max,
+                                               _ev_consts.growth_factor, log(M_cell), false);
+                    }
+
+                    P21EmissivityAverages p21_avg;
+                    memset(&p21_avg, 0, sizeof(p21_avg));
+                    if (_ev_consts.fix_mean) {
+                        IntegralProperties averages_global;
+                        double M_turn_acg_global = pow(10, emissivity_fields->log10_mturn_acg_ave);
+                        double M_turn_mcg_global = pow(10, emissivity_fields->log10_mturn_mcg_ave);
+                        get_uhmf_averages(M_min, M_max_integral, M_turn_acg_global,
+                                          M_turn_mcg_global, &_ev_consts, &averages_global);
+                        p21_avg.halo_number = averages_global.halo_number;
+                        p21_avg.halo_mass_density = averages_global.halo_mass_density;
+                        p21_avg.stellar_mass_density_acg = averages_global.stellar_mass_density_acg;
+                        p21_avg.stellar_mass_density_mcg = averages_global.stellar_mass_density_mcg;
+                        p21_avg.sfrd_acg = averages_global.sfrd_acg;
+                        p21_avg.sfrd_mcg = averages_global.sfrd_mcg;
+                        p21_avg.n_ion = averages_global.n_ion;
+                        p21_avg.xray_emissivity = averages_global.xray_emissivity;
+                        p21_avg.fesc_weighted_sfrd = averages_global.fesc_weighted_sfrd;
+                    }
+
+                    int cuda_stat = p21_cuda_emissivity_eval_and_finish(cuda_ctx, &_ev_consts,
+                                                                        &p21_avg, emissivity_fields);
+                    cuda_ctx = NULL;
+                    free_conditional_tables();
+                    if (cuda_stat == 0) {
+                        emissivity_fields_debug_print_avg(emissivity_fields, perturbed_field,
+                                                          &consts, M_min, M_MAX_INTEGRAL);
+                        LOG_DEBUG("Done.");
+                        return 0;
+                    }
+                    if (cuda_stat > 0) Throw(cuda_stat);
+                } else {
+                    p21_cuda_emissivity_abort(cuda_ctx);
+                    cuda_ctx = NULL;
+                }
+            }
+        }
+        if (p21_cuda_get_enabled() &&
+            source_model_uses_lagrangian_grids(matter_options_global->SOURCE_MODEL) &&
+            simulation_options_global->HII_DIM > 1 &&
+            uses_hmf_interpolation(matter_options_global->USE_INTERPOLATION_TABLES)) {
+            ScalingConstants consts;
+            set_scaling_constants(redshift, &consts, true);
+
+            double M_min = minimum_source_mass(redshift, false);
+            double M_max_integral;
+            if (matter_options_global->SOURCE_MODEL == SOURCE_MODEL_CHMF_SAMPLER) {
+                M_max_integral = simulation_options_global->SAMPLER_MIN_MASS;
+            } else if (matter_options_global->SOURCE_MODEL == SOURCE_MODEL_DEXM_ESF) {
+                M_max_integral = RtoM(physconst.l_factor * simulation_options_global->BOX_LEN /
+                                      simulation_options_global->DIM);
+            } else {
+                M_max_integral = M_MAX_INTEGRAL;
+            }
+            int need_integral = (M_min < M_max_integral) ? 1 : 0;
+
+            double log10_mturn_averages[2] = {0.0, 0.0};
+            double min_density = 0.0, max_density = 0.0;
+            lag_cuda_ctx = p21_cuda_lag_emissivity_begin(
+                redshift, ini_boxes, previous_spin_temp, previous_ionize_box, &consts, need_integral,
+                log10_mturn_averages, &min_density, &max_density);
+            if (lag_cuda_ctx != NULL) {
+                emissivity_fields->log10_mturn_acg_ave = log10_mturn_averages[0];
+                emissivity_fields->log10_mturn_mcg_ave = log10_mturn_averages[1];
+
+                bool lag_ok = true;
+                if (source_model_uses_sampled_halos(matter_options_global->SOURCE_MODEL)) {
+                    int h_stat = p21_cuda_lag_emissivity_add_halos(lag_cuda_ctx, ini_boxes, halos,
+                                                                   &consts);
+                    if (h_stat > 0) {
+                        p21_cuda_lag_emissivity_abort(lag_cuda_ctx);
+                        lag_cuda_ctx = NULL;
+                        Throw(h_stat);
+                    }
+                    if (h_stat < 0) lag_ok = false;
+                }
+
+                if (lag_ok && need_integral) {
+                    double lnM_min = log(M_min);
+                    double lnM_max = log(M_max_integral);
+                    double M_cell = consts.M_cell;
+                    ScalingConstants _ev_consts = consts;
+                    if (astro_options_global->HALO_SCALING_RELATIONS_MEDIAN) {
+                        _ev_consts = mimic_scatter_in_consts(&consts);
+                    }
+
+                    if (astro_options_global->INTEGRATION_METHOD_ACGS ==
+                            INTEGRATION_METHOD_GAUSS_LEGENDRE ||
+                        (astro_options_global->USE_MCGS &&
+                         astro_options_global->INTEGRATION_METHOD_MCGS ==
+                             INTEGRATION_METHOD_GAUSS_LEGENDRE)) {
+                        initialise_GL(lnM_min, lnM_max);
+                    }
+                    if (astro_options_global->USE_TS_FLUCT ||
+                        (config_settings.EXTRA_EMISSIVITY_FIELDS &&
+                         source_model_is_mass_dependent(matter_options_global->SOURCE_MODEL))) {
+                        initialize_sfrd_conditional_tables(_ev_consts.redshift, min_density,
+                                                           max_density, M_min, M_max_integral,
+                                                           M_cell, &_ev_consts);
+                    }
+                    if (astro_options_global->USE_TS_FLUCT &&
+                        astro_options_global->USE_METALLICITY) {
+                        initialize_xray_emissivity_conditional_tables(
+                            _ev_consts.redshift, min_density, max_density, M_min, M_max_integral,
+                            M_cell, &_ev_consts);
+                    }
+                    initialize_nion_conditional_tables(_ev_consts.redshift, min_density, max_density,
+                                                       M_min, M_max_integral, M_cell, &_ev_consts,
+                                                       false);
+                    if (config_settings.EXTRA_EMISSIVITY_FIELDS) {
+                        initialize_dndm_tables(min_density, max_density, lnM_min, lnM_max,
+                                               _ev_consts.growth_factor, log(M_cell), false);
+                    }
+
+                    P21EmissivityAverages p21_avg;
+                    memset(&p21_avg, 0, sizeof(p21_avg));
+                    if (_ev_consts.fix_mean) {
+                        IntegralProperties averages_global;
+                        double M_turn_acg_global = pow(10, emissivity_fields->log10_mturn_acg_ave);
+                        double M_turn_mcg_global = pow(10, emissivity_fields->log10_mturn_mcg_ave);
+                        get_uhmf_averages(M_min, M_max_integral, M_turn_acg_global,
+                                          M_turn_mcg_global, &_ev_consts, &averages_global);
+                        p21_avg.halo_number = averages_global.halo_number;
+                        p21_avg.halo_mass_density = averages_global.halo_mass_density;
+                        p21_avg.stellar_mass_density_acg = averages_global.stellar_mass_density_acg;
+                        p21_avg.stellar_mass_density_mcg = averages_global.stellar_mass_density_mcg;
+                        p21_avg.sfrd_acg = averages_global.sfrd_acg;
+                        p21_avg.sfrd_mcg = averages_global.sfrd_mcg;
+                        p21_avg.n_ion = averages_global.n_ion;
+                        p21_avg.xray_emissivity = averages_global.xray_emissivity;
+                        p21_avg.fesc_weighted_sfrd = averages_global.fesc_weighted_sfrd;
+                    }
+
+                    int int_stat = p21_cuda_lag_emissivity_add_integral(lag_cuda_ctx, ini_boxes,
+                                                                        &_ev_consts, &p21_avg);
+                    free_conditional_tables();
+                    if (int_stat > 0) {
+                        p21_cuda_lag_emissivity_abort(lag_cuda_ctx);
+                        lag_cuda_ctx = NULL;
+                        Throw(int_stat);
+                    }
+                    if (int_stat < 0) lag_ok = false;
+                }
+
+                if (lag_ok) {
+                    int fin_stat = p21_cuda_lag_emissivity_finish(lag_cuda_ctx, emissivity_fields);
+                    lag_cuda_ctx = NULL;
+                    if (fin_stat == 0) {
+                        emissivity_fields_debug_print_avg(emissivity_fields, perturbed_field,
+                                                          &consts, M_min, M_MAX_INTEGRAL);
+                        LOG_DEBUG("Done.");
+                        return 0;
+                    }
+                    if (fin_stat > 0) Throw(fin_stat);
+                } else {
+                    p21_cuda_lag_emissivity_abort(lag_cuda_ctx);
+                    lag_cuda_ctx = NULL;
+                }
+            }
+        }
 #endif
 
         LOG_DEBUG("Resetting emissivity_fields dim %d %llu %llu",
@@ -812,7 +1033,16 @@ int ComputeEmissivityFields(double redshift, InitialConditions *ini_boxes,
         LOG_SUPER_DEBUG("log10 Mutrn ACG: %.6e", pow(10, emissivity_fields->log10_mturn_acg_ave));
         LOG_SUPER_DEBUG("log10 Mutrn MCG: %.6e", pow(10, emissivity_fields->log10_mturn_mcg_ave));
     }
-    Catch(status) { return (status); }
+    Catch(status) {
+        if (cuda_ctx) {
+            p21_cuda_emissivity_abort(cuda_ctx);
+        }
+        if (lag_cuda_ctx) {
+            p21_cuda_lag_emissivity_abort(lag_cuda_ctx);
+        }
+        free_conditional_tables();
+        return (status);
+    }
     LOG_DEBUG("Done.");
     return 0;
 }

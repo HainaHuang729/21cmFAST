@@ -10,6 +10,7 @@
 #include "Constants.h"
 #include "InputParameters.h"
 #include "cexcept.h"
+#include "cuda/cuda_api.h"
 #include "exceptions.h"
 #include "logger.h"
 #include "thermochem.h"
@@ -41,6 +42,8 @@ static gsl_spline *beta_spline;
 static double RR_table[RR_Z_NPTS][RR_lnGamma_NPTS], lnGamma_values[RR_lnGamma_NPTS];
 static gsl_interp_accel *RR_acc[RR_Z_NPTS];
 static gsl_spline *RR_spline[RR_Z_NPTS];
+static int mhr_generation = 0;
+static bool mhr_initialized = false;
 
 static bool oob_warning_printed;
 
@@ -98,16 +101,40 @@ void init_MHR() {
     init_beta_MHR(); /*initializes the lookup table for the beta parameter in MHR00 model*/
     init_A_MHR();    /*initializes the lookup table for the A parameter in MHR00 model*/
 
+    int gpu_filled = 0;
+#ifdef USE_CUDA
+    if (p21_cuda_get_enabled()) {
+        double a_vals[RR_Z_NPTS], c_vals[RR_Z_NPTS], beta_vals[RR_Z_NPTS];
+        for (z_ct = 0; z_ct < RR_Z_NPTS; z_ct++) {
+            z = z_ct * RR_DEL_Z;
+            a_vals[z_ct] = A_MHR(z);
+            c_vals[z_ct] = C_MHR(z);
+            beta_vals[z_ct] = beta_MHR(z);
+        }
+        for (gamma_ct = 0; gamma_ct < RR_lnGamma_NPTS; gamma_ct++) {
+            lnGamma_values[gamma_ct] = RR_lnGamma_min + gamma_ct * RR_DEL_lnGamma;
+        }
+        if (p21_cuda_fill_mhr_table(RR_Z_NPTS, RR_DEL_Z, RR_lnGamma_NPTS, RR_lnGamma_min,
+                                    RR_DEL_lnGamma, No, cosmo_params_global->Y_He, alpha_B(1e4),
+                                    a_vals, c_vals, beta_vals, &RR_table[0][0]) == 0) {
+            gpu_filled = 1;
+        }
+    }
+#endif
+
     // now the recombination rate look up tables
     for (z_ct = 0; z_ct < RR_Z_NPTS; z_ct++) {
-        z = z_ct * RR_DEL_Z;  // redshift corresponding to index z_ct of the array
+        if (!gpu_filled) {
+            z = z_ct * RR_DEL_Z;  // redshift corresponding to index z_ct of the array
 
-        // Intialize the Gamma values
-        for (gamma_ct = 0; gamma_ct < RR_lnGamma_NPTS; gamma_ct++) {
-            lnGamma_values[gamma_ct] = RR_lnGamma_min + gamma_ct * RR_DEL_lnGamma;  // ln of Gamma12
-            gamma = exp(lnGamma_values[gamma_ct]);
-            RR_table[z_ct][gamma_ct] =
-                recombination_rate(z, gamma, 1, 1);  // CHANGE THIS TO INCLUDE TEMPERATURE
+            // Intialize the Gamma values
+            for (gamma_ct = 0; gamma_ct < RR_lnGamma_NPTS; gamma_ct++) {
+                lnGamma_values[gamma_ct] =
+                    RR_lnGamma_min + gamma_ct * RR_DEL_lnGamma;  // ln of Gamma12
+                gamma = exp(lnGamma_values[gamma_ct]);
+                RR_table[z_ct][gamma_ct] =
+                    recombination_rate(z, gamma, 1, 1);  // CHANGE THIS TO INCLUDE TEMPERATURE
+            }
         }
 
         // set up the spline in gamma
@@ -117,6 +144,8 @@ void init_MHR() {
 
     }  // go to next redshift
     oob_warning_printed = false;
+    mhr_generation++;
+    mhr_initialized = true;
 
     return;
 }
@@ -133,8 +162,25 @@ void free_MHR() {
         gsl_spline_free(RR_spline[z_ct]);
         gsl_interp_accel_free(RR_acc[z_ct]);
     }
+    mhr_initialized = false;
 
     return;
+}
+
+int p21_get_mhr_rr_table(const double **rr_table_out, int *nz_out, int *ng_out,
+                         double *del_z_out, double *lng_min_out, double *del_lng_out,
+                         int *generation_out) {
+    if (!mhr_initialized) {
+        return 0;
+    }
+    if (rr_table_out) *rr_table_out = &RR_table[0][0];
+    if (nz_out) *nz_out = RR_Z_NPTS;
+    if (ng_out) *ng_out = RR_lnGamma_NPTS;
+    if (del_z_out) *del_z_out = (double)RR_DEL_Z;
+    if (lng_min_out) *lng_min_out = RR_lnGamma_min;
+    if (del_lng_out) *del_lng_out = (double)RR_DEL_lnGamma;
+    if (generation_out) *generation_out = mhr_generation;
+    return 1;
 }
 
 // calculates the attenuated photoionization rate due to self-shielding (in units of 1e-12 s^-1)

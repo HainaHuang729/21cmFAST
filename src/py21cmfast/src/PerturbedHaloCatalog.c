@@ -17,6 +17,7 @@
 #include "OutputStructs.h"
 #include "cexcept.h"
 #include "cosmology.h"
+#include "cuda/cuda_api.h"
 #include "debugging.h"
 #include "exceptions.h"
 #include "indexing.h"
@@ -41,6 +42,18 @@ int ComputePerturbedHaloCatalog(float redshift, InitialConditions *boxes, TsBox 
         // Do each time to avoid Python garbage collection issues
 
         omp_set_num_threads(simulation_options_global->N_THREADS);
+
+#ifdef USE_CUDA
+        if (p21_cuda_get_enabled()) {
+            int cuda_stat = p21_cuda_compute_perturbed_halo_catalog(
+                redshift, boxes, prev_ts, prev_ion, halos, halos_perturbed);
+            if (cuda_stat == 0) {
+                LOG_DEBUG("Perturbed positions of %llu Halos (CUDA)", halos_perturbed->n_halos);
+                return 0;
+            }
+            if (cuda_stat > 0) Throw(cuda_stat);
+        }
+#endif
 
         float growth_factor, displacement_factor_2LPT, init_growth_factor,
             init_displacement_factor_2LPT;
